@@ -37,8 +37,11 @@ target = float(row[date_index])  # e.g. 0.87 для DE на 2026-05-14
 
 ### Шаг 2 — Получить текущие ROAS (Bulk API)
 
-**⚠️ SOAP `GetCampaignsByIds` НЕ возвращает ROAS для PMax кампаний — всегда nil.**
-**Использовать только Bulk Download:**
+**⚠️ КРИТИЧНО: SOAP `GetCampaignsByIds` возвращает `<BiddingScheme i:nil="true"/>` для всех PMax кампаний — ROAS через SOAP недоступен.**
+
+Это подтверждено экспериментально: UI Bing Ads показывает ROAS для PMax (например, 86%), а SOAP отвечает nil. Значение хранится в Bid Strategy, не в BiddingScheme кампании.
+
+**Единственный надёжный источник для PMax — Bulk Download API (и для Shopping тоже):**
 
 ```bash
 # SOAP DownloadCampaignsByAccountIds → poll → download ZIP → parse CSV
