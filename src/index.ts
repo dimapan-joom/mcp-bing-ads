@@ -774,6 +774,31 @@ class BingAdsManager {
   }
 
   // ============================================
+  // VERIFY CAMPAIGN — read back via SOAP
+  // ============================================
+
+  private async getCampaignActualState(client: ClientConfig, campaignId: string): Promise<{ status: string; biddingType: string; targetRoas: number | null; dailyBudget: number | null }> {
+    const body = `<GetCampaignsByIdsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+      <AccountId>${client.account_id}</AccountId>
+      <CampaignIds xmlns:a="http://schemas.microsoft.com/2003/10/Serialization/Arrays">
+        <a:long>${campaignId}</a:long>
+      </CampaignIds>
+      <CampaignType>Search Shopping PerformanceMax DynamicSearchAds</CampaignType>
+    </GetCampaignsByIdsRequest>`;
+
+    const xml = await this.soapCall("GetCampaignsByIds", body, client);
+
+    const status = xml.match(/<Status>(\w+)<\/Status>/)?.[1] ?? "Unknown";
+    const biddingType = xml.match(/i:type="(\w+BiddingScheme)"/)?.[1] ?? "Unknown";
+    const targetRoasStr = xml.match(/<TargetRoas>([\d.]+)<\/TargetRoas>/)?.[1];
+    const targetRoas = targetRoasStr ? parseFloat(targetRoasStr) : null;
+    const dailyBudgetStr = xml.match(/<DailyBudget>([\d.]+)<\/DailyBudget>/)?.[1];
+    const dailyBudget = dailyBudgetStr ? parseFloat(dailyBudgetStr) : null;
+
+    return { status, biddingType, targetRoas, dailyBudget };
+  }
+
+  // ============================================
   // SET CAMPAIGN BIDDING STRATEGY
   // ============================================
 
@@ -782,7 +807,7 @@ class BingAdsManager {
     targetRoas?: number;      // e.g. 0.85 = 85% ROAS. Used by TargetRoas AND MaxConversionValue
     targetCpa?: number;       // e.g. 5.00 = $5 CPA
     maxCpc?: number;          // optional cap
-  }): Promise<{ success: boolean; message: string }> {
+  }): Promise<any> {
     let schemeXml: string;
     const maxCpcXml = strategy.maxCpc
       ? `<MaxCpc><Amount>${strategy.maxCpc}</Amount></MaxCpc>`
@@ -822,20 +847,48 @@ class BingAdsManager {
     </UpdateCampaignsRequest>`;
 
     await this.soapCall("UpdateCampaigns", body, client);
-    return { success: true, message: `Campaign ${campaignId} bidding updated to ${strategy.type}${strategy.targetRoas ? ` (ROAS: ${strategy.targetRoas})` : ""}${strategy.targetCpa ? ` (CPA: $${strategy.targetCpa})` : ""}` };
+
+    // Verify the change was actually applied
+    const actual = await this.getCampaignActualState(client, campaignId);
+    const expectedRoas = strategy.targetRoas ?? null;
+    const roasMatch = expectedRoas === null || (actual.targetRoas !== null && Math.abs(actual.targetRoas - expectedRoas) < 0.001);
+    const verified = roasMatch;
+
+    return {
+      success: true,
+      verified,
+      requested: { strategy: strategy.type, targetRoas: strategy.targetRoas ?? null },
+      actual: { biddingType: actual.biddingType, targetRoas: actual.targetRoas },
+      message: verified
+        ? `✅ Campaign ${campaignId} bidding confirmed: ${actual.biddingType}${actual.targetRoas ? ` ROAS ${Math.round(actual.targetRoas * 100)}%` : ""}`
+        : `⚠️ Campaign ${campaignId} bidding set but verification mismatch. Requested: ${strategy.type} ROAS:${strategy.targetRoas} — Actual: ${actual.biddingType} ROAS:${actual.targetRoas}`,
+    };
   }
 
   // ============================================
   // SET CAMPAIGN STATUS
   // ============================================
 
-  async setCampaignStatus(client: ClientConfig, campaignId: string, status: "Active" | "Paused"): Promise<{ success: boolean; message: string }> {
+  async setCampaignStatus(client: ClientConfig, campaignId: string, status: "Active" | "Paused"): Promise<any> {
     const body = `<UpdateCampaignsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
       <AccountId>${client.account_id}</AccountId>
       <Campaigns><Campaign><Id>${campaignId}</Id><Status>${status}</Status></Campaign></Campaigns>
     </UpdateCampaignsRequest>`;
     await this.soapCall("UpdateCampaigns", body, client);
-    return { success: true, message: `Campaign ${campaignId} status set to ${status}` };
+
+    // Verify the status change was actually applied
+    const actual = await this.getCampaignActualState(client, campaignId);
+    const verified = actual.status === status;
+
+    return {
+      success: true,
+      verified,
+      requested: status,
+      actual: actual.status,
+      message: verified
+        ? `✅ Campaign ${campaignId} status confirmed: ${actual.status}`
+        : `⚠️ Campaign ${campaignId} status mismatch! Requested: ${status} — Actual: ${actual.status}`,
+    };
   }
 
   // ============================================
