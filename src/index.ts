@@ -792,7 +792,11 @@ class BingAdsManager {
 
   async getBudgetPacing(client: ClientConfig, monthStart: string, monthEnd: string): Promise<any[]> {
     const [sy, sm, sd] = monthStart.split("-").map(Number);
-    const [ey, em, ed] = monthEnd.split("-").map(Number);
+    // Bing reports can't have a future end date — cap to today
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    const effectiveEnd = monthEnd > todayStr ? todayStr : monthEnd;
+    const [ey, em, ed] = effectiveEnd.split("-").map(Number);
     const reportRequest = {
       Type: "BudgetSummaryReportRequest",
       Format: "Csv",
