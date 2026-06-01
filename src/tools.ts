@@ -17,6 +17,34 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "bing_ads_get_campaigns_with_roas",
+    description: `Get all active campaigns with their actual Target ROAS via Bulk Download API.
+
+⚠️ WHY THIS EXISTS: bing_ads_list_campaigns returns BiddingScheme=null for ALL PMax campaigns
+because the Bing Ads SOAP/REST API does not expose ROAS at the campaign level for PMax.
+The ROAS is stored in the Bid Strategy and is ONLY accessible via the Bulk Download CSV
+(column "Bid Strategy TargetRoas"). This has been confirmed experimentally — the Bing UI
+shows ROAS values (e.g. 86%) while SOAP returns nil for the same campaigns.
+
+Use this tool when you need to:
+- Read current ROAS for any campaign type (PMax, Shopping, Search)
+- Compare current vs target ROAS before updating
+- Verify ROAS was correctly applied after bing_ads_set_campaign_bidding
+
+Note: slower than bing_ads_list_campaigns (~15-30s) due to async Bulk download.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        status_filter: {
+          type: "string",
+          description: "Filter by status: 'active' (default), 'paused', 'all'",
+        },
+      },
+    },
+  },
+  {
     name: "bing_ads_list_campaigns",
     description: "List campaigns for the Bing/Microsoft Advertising account. By default returns only Active campaigns. Pass status_filter='all' to include Paused/Deleted.",
     inputSchema: {

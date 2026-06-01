@@ -287,6 +287,118 @@ class BingAdsManager {
   // CAMPAIGN MANAGEMENT
   // ============================================
 
+  // ============================================
+  // GET ALL CAMPAIGNS WITH ROAS — via Bulk API
+  //
+  // WHY: bing_ads_list_campaigns uses REST/SOAP QueryByAccountId which returns
+  // BiddingScheme=nil for ALL PMax campaigns. The Target ROAS is stored in the
+  // Bid Strategy, not in the Campaign object itself, and is only exposed via
+  // the Bulk Download API (CSV column "Bid Strategy TargetRoas").
+  //
+  // This is the ONLY reliable way to read current ROAS for PMax campaigns.
+  // Confirmed experimentally: UI shows 86% ROAS for PMax, SOAP returns nil.
+  // ============================================
+
+  async getCampaignsWithRoas(client: ClientConfig, statusFilter: string = "active"): Promise<any[]> {
+    const BULK_SOAP = "https://bulk.api.bingads.microsoft.com/Api/Advertiser/CampaignManagement/v13/BulkService.svc";
+    const token = await this.getAccessToken();
+
+    const makeEnvelope = (body: string) => `<s:Envelope xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Header xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+    <AuthenticationToken>${token}</AuthenticationToken>
+    <CustomerAccountId>${client.account_id}</CustomerAccountId>
+    <CustomerId>${client.customer_id}</CustomerId>
+    <DeveloperToken>${this.developerToken}</DeveloperToken>
+  </s:Header>
+  <s:Body>${body}</s:Body>
+</s:Envelope>`;
+
+    // 1. Submit Bulk download
+    const dlResp = await fetch(BULK_SOAP, {
+      method: "POST",
+      headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "DownloadCampaignsByAccountIds" },
+      body: makeEnvelope(`<DownloadCampaignsByAccountIdsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+        <AccountIds xmlns:a="http://schemas.microsoft.com/2003/10/Serialization/Arrays"><a:long>${client.account_id}</a:long></AccountIds>
+        <DataScope>EntityData</DataScope>
+        <DownloadEntities><DownloadEntity>Campaigns</DownloadEntity></DownloadEntities>
+        <DownloadFileType>Csv</DownloadFileType><FormatVersion>6.0</FormatVersion>
+      </DownloadCampaignsByAccountIdsRequest>`),
+    });
+    const dlText = await dlResp.text();
+    const requestId = dlText.match(/<DownloadRequestId>(.*?)<\/DownloadRequestId>/)?.[1];
+    if (!requestId) throw new Error("Bulk download failed: no request ID");
+
+    // 2. Poll until Completed (max 60s)
+    let downloadUrl: string | null = null;
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const pollResp = await fetch(BULK_SOAP, {
+        method: "POST",
+        headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "GetBulkDownloadStatus" },
+        body: makeEnvelope(`<GetBulkDownloadStatusRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13"><RequestId>${requestId}</RequestId></GetBulkDownloadStatusRequest>`),
+      });
+      const pollText = await pollResp.text();
+      const url = pollText.match(/<ResultFileUrl>(.*?)<\/ResultFileUrl>/)?.[1]?.replace(/&amp;/g, "&");
+      if (url) { downloadUrl = url; break; }
+    }
+    if (!downloadUrl) throw new Error("Bulk download timed out after 60s");
+
+    // 3. Download ZIP immediately (URL expires ~25min, download right away)
+    const fileResp = await fetch(downloadUrl);
+    const zipBuffer = Buffer.from(await fileResp.arrayBuffer());
+
+    // 4. Unzip + parse CSV
+    const { execSync } = await import("child_process");
+    const { writeFileSync, readFileSync } = await import("fs");
+    const { join } = await import("path");
+    const { tmpdir } = await import("os");
+    const tmpZip = join(tmpdir(), `bing_bulk_${Date.now()}.zip`);
+    const tmpDir = join(tmpdir(), `bing_bulk_dir_${Date.now()}`);
+    writeFileSync(tmpZip, zipBuffer);
+    execSync(`mkdir -p "${tmpDir}" && unzip -o "${tmpZip}" -d "${tmpDir}"`, { stdio: "ignore" });
+    const csvFile = execSync(`find "${tmpDir}" -name "*.csv"`, { encoding: "utf-8" }).trim();
+    const csvContent = readFileSync(csvFile, "utf-8").replace(/^﻿/, "");
+    execSync(`rm -rf "${tmpZip}" "${tmpDir}"`, { stdio: "ignore" });
+
+    // 5. Parse rows
+    const lines = csvContent.split("\n");
+    const headers = lines[0].split(",").map((h: string) => h.trim().replace(/^"|"$/g, ""));
+    const col = (name: string) => headers.indexOf(name);
+
+    const results: any[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",").map((c: string) => c.trim().replace(/^"|"$/g, ""));
+      if (cols[col("Type")] !== "Campaign") continue;
+
+      const status = cols[col("Status")] ?? "";
+      if (statusFilter === "active" && status !== "Active") continue;
+      if (statusFilter === "paused" && status !== "Paused") continue;
+
+      const name    = cols[col("Campaign")] ?? "";
+      const id      = cols[col("Id")] ?? "";
+      const ctype   = cols[col("Campaign Type")] ?? "";
+      const bidType = cols[col("Bid Strategy Type")] ?? "";
+      const roasStr = cols[col("Bid Strategy TargetRoas")] ?? "";
+      const budget  = cols[col("Budget")] ?? "";
+
+      const roas = roasStr ? Math.round(parseFloat(roasStr) * 1000) / 1000 : null;
+
+      results.push({
+        campaign_id: id,
+        campaign_name: name,
+        status,
+        campaign_type: ctype,
+        bid_strategy_type: bidType,
+        target_roas: roas,
+        daily_budget: budget ? parseFloat(budget) : null,
+        // Note: target_roas is the ONLY reliable ROAS value.
+        // bing_ads_list_campaigns returns null for PMax — use this tool instead.
+      });
+    }
+
+    return results.sort((a, b) => a.campaign_name.localeCompare(b.campaign_name));
+  }
+
   async listCampaigns(client: ClientConfig): Promise<any> {
     const url = `${CAMPAIGN_MGMT_BASE}/Campaigns/QueryByAccountId`;
     // The Bing Ads API requires an explicit CampaignType — omitting it returns nothing.
@@ -1493,6 +1605,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }, null, 2),
           }],
         };
+      }
+
+      case "bing_ads_get_campaigns_with_roas": {
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.getCampaignsWithRoas(
+          client,
+          (args?.status_filter as string) ?? "active"
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       case "bing_ads_list_campaigns": {
