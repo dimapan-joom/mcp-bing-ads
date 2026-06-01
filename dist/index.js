@@ -68,13 +68,18 @@ function loadConfig() {
         const clientSecret = envTrimmed("BING_ADS_CLIENT_SECRET");
         const refreshToken = envTrimmed("BING_ADS_REFRESH_TOKEN");
         if (token && clientId && refreshToken) {
+            // Build a minimal Config from env vars — oauth creds are used by BingAdsManager directly,
+            // account/customer IDs can be overridden per-request via bing_ads_get_client_context.
             return {
+                oauth: {
+                    client_id: clientId,
+                    client_secret: clientSecret,
+                    token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                    scope: "https://ads.microsoft.com/msads.manage offline_access",
+                },
                 clients: {
                     default: {
-                        developer_token: token,
-                        client_id: clientId,
-                        client_secret: clientSecret,
-                        refresh_token: refreshToken,
+                        name: "default",
                         account_id: envTrimmed("BING_ADS_ACCOUNT_ID"),
                         customer_id: envTrimmed("BING_ADS_CUSTOMER_ID"),
                         folder: "/",
