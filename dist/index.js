@@ -803,21 +803,20 @@ class BingAdsManager {
         const expectedRoas = strategy.targetRoas ?? null;
         const roasMatch = expectedRoas === null || (actual.targetRoas !== null && Math.abs(actual.targetRoas - expectedRoas) < 0.005);
         const verified = roasMatch;
-        if (!verified) {
-            await this.sendSlackAlert(`🚨 *Bing Ads — Bidding update FAILED verification*\n` +
-                `Campaign: \`${campaignId}\` (${client.name})\n` +
-                `Requested: ${strategy.type} ROAS=${strategy.targetRoas}\n` +
-                `Actual: ${actual.biddingType} ROAS=${actual.targetRoas}\n` +
-                `Action required: check campaign in Bing Ads UI`);
-        }
+        const alertText = !verified
+            ? `🚨 *Bing Ads — Bidding update FAILED verification*\nCampaign: \`${campaignId}\` (${client.name})\nRequested: ${strategy.type} ROAS=${strategy.targetRoas}\nActual: ${actual.biddingType} ROAS=${actual.targetRoas}\nAction required: check campaign in Bing Ads UI`
+            : null;
         return {
             success: true,
             verified,
             requested: { strategy: strategy.type, targetRoas: strategy.targetRoas ?? null },
             actual: { biddingType: actual.biddingType, targetRoas: actual.targetRoas },
+            slack_alert_needed: !verified,
+            slack_alert_text: alertText,
+            slack_channels: !verified ? ["C0B7H9YT1C4", "ULALR4665"] : [],
             message: verified
                 ? `✅ Campaign ${campaignId} bidding confirmed: ${actual.biddingType}${actual.targetRoas ? ` ROAS ${Math.round(actual.targetRoas * 100)}%` : ""}`
-                : `⚠️ Campaign ${campaignId} bidding mismatch! Requested ROAS:${strategy.targetRoas} — Actual ROAS:${actual.targetRoas}`,
+                : `⚠️ Campaign ${campaignId} bidding mismatch! Requested ROAS:${strategy.targetRoas} — Actual ROAS:${actual.targetRoas}. SEND SLACK ALERT to C0B7H9YT1C4 and ULALR4665.`,
         };
     }
     // ============================================
@@ -840,41 +839,21 @@ class BingAdsManager {
         const xml = await this.soapCall("GetCampaignsByIds", soapBody, client);
         const actualStatus = xml.match(/<Status>(\w+)<\/Status>/)?.[1] ?? "Unknown";
         const verified = actualStatus === status;
-        if (!verified) {
-            await this.sendSlackAlert(`🚨 *Bing Ads — Status update FAILED verification*\n` +
-                `Campaign: \`${campaignId}\` (${client.name})\n` +
-                `Requested: ${status}\n` +
-                `Actual: ${actualStatus}\n` +
-                `Action required: check campaign in Bing Ads UI`);
-        }
+        const alertText = !verified
+            ? `🚨 *Bing Ads — Status update FAILED verification*\nCampaign: \`${campaignId}\` (${client.name})\nRequested: ${status}\nActual: ${actualStatus}\nAction required: check campaign in Bing Ads UI`
+            : null;
         return {
             success: true,
             verified,
             requested: status,
             actual: actualStatus,
+            slack_alert_needed: !verified,
+            slack_alert_text: alertText,
+            slack_channels: !verified ? ["C0B7H9YT1C4", "ULALR4665"] : [],
             message: verified
                 ? `✅ Campaign ${campaignId} status confirmed: ${actualStatus}`
-                : `⚠️ Campaign ${campaignId} status mismatch! Requested: ${status} — Actual: ${actualStatus}`,
+                : `⚠️ Campaign ${campaignId} status mismatch! Requested: ${status} — Actual: ${actualStatus}. SEND SLACK ALERT to C0B7H9YT1C4 and ULALR4665.`,
         };
-    }
-    // ============================================
-    // SLACK ALERT — fires on verification failure
-    // ============================================
-    async sendSlackAlert(text) {
-        const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
-        if (!SLACK_TOKEN)
-            return; // no token configured — skip silently
-        const channels = [
-            "C0B7H9YT1C4", // #marketing-ai-debug (always)
-            "ULALR4665", // @dimapan DM (real alert)
-        ];
-        for (const channel of channels) {
-            await fetch("https://slack.com/api/chat.postMessage", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${SLACK_TOKEN}` },
-                body: JSON.stringify({ channel, text }),
-            }).catch(() => { });
-        }
     }
     // ============================================
     // ADD RESPONSIVE SEARCH AD

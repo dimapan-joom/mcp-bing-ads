@@ -163,7 +163,11 @@ export const tools: Tool[] = [
   {
     name: "bing_ads_set_campaign_bidding",
     description: `Change bidding strategy for a campaign. Supports Target ROAS, Target CPA, Maximize Conversions, Maximize Clicks, Manual CPC.
-⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
+
+After calling this tool, check the result:
+- If verified=true: log the change via sheets-log tool.
+- If verified=false (slack_alert_needed=true): IMMEDIATELY send slack_alert_text to ALL channels in slack_channels (C0B7H9YT1C4 = #marketing-ai-debug, ULALR4665 = @dimapan) using the Slack MCP tool, then log the failure.`,
     inputSchema: {
       additionalProperties: false,
       type: "object",
@@ -184,7 +188,11 @@ export const tools: Tool[] = [
   },
   {
     name: "bing_ads_set_campaign_status",
-    description: "Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.",
+    description: `Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
+
+After calling this tool, check the result:
+- If verified=true: log the change via sheets-log tool.
+- If verified=false (slack_alert_needed=true): IMMEDIATELY send slack_alert_text to ALL channels in slack_channels (C0B7H9YT1C4 = #marketing-ai-debug, ULALR4665 = @dimapan) using the Slack MCP tool, then log the failure.`,
     inputSchema: {
       additionalProperties: false,
       type: "object",
