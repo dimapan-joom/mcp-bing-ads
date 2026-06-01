@@ -654,24 +654,108 @@ class BingAdsManager {
         return text;
     }
     // ============================================
-    // VERIFY CAMPAIGN — read back via SOAP
+    // VERIFY CAMPAIGN — via Bulk API (accurate for PMax + Shopping)
+    // SOAP GetCampaignsByIds does NOT return ROAS for PMax campaigns.
     // ============================================
     async getCampaignActualState(client, campaignId) {
-        const body = `<GetCampaignsByIdsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+        // Use SOAP for status (fast), Bulk for ROAS (accurate)
+        // Status via SOAP
+        const soapBody = `<GetCampaignsByIdsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
       <AccountId>${client.account_id}</AccountId>
       <CampaignIds xmlns:a="http://schemas.microsoft.com/2003/10/Serialization/Arrays">
         <a:long>${campaignId}</a:long>
       </CampaignIds>
       <CampaignType>Search Shopping PerformanceMax DynamicSearchAds</CampaignType>
     </GetCampaignsByIdsRequest>`;
-        const xml = await this.soapCall("GetCampaignsByIds", body, client);
+        const xml = await this.soapCall("GetCampaignsByIds", soapBody, client);
         const status = xml.match(/<Status>(\w+)<\/Status>/)?.[1] ?? "Unknown";
-        const biddingType = xml.match(/i:type="(\w+BiddingScheme)"/)?.[1] ?? "Unknown";
-        const targetRoasStr = xml.match(/<TargetRoas>([\d.]+)<\/TargetRoas>/)?.[1];
-        const targetRoas = targetRoasStr ? parseFloat(targetRoasStr) : null;
         const dailyBudgetStr = xml.match(/<DailyBudget>([\d.]+)<\/DailyBudget>/)?.[1];
         const dailyBudget = dailyBudgetStr ? parseFloat(dailyBudgetStr) : null;
-        return { status, biddingType, targetRoas, dailyBudget };
+        // ROAS via Bulk API (the only reliable source for PMax campaigns)
+        const roas = await this.getCampaignRoasViaBulk(client, campaignId);
+        return { status, biddingType: roas !== null ? "MaxConversionValue/TargetRoas" : "Unknown", targetRoas: roas, dailyBudget };
+    }
+    async getCampaignRoasViaBulk(client, campaignId) {
+        const BULK_SOAP = "https://bulk.api.bingads.microsoft.com/Api/Advertiser/CampaignManagement/v13/BulkService.svc";
+        const token = await this.getAccessToken();
+        const makeEnvelope = (action, body) => `<s:Envelope xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Header xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+    <AuthenticationToken>${token}</AuthenticationToken>
+    <CustomerAccountId>${client.account_id}</CustomerAccountId>
+    <CustomerId>${client.customer_id}</CustomerId>
+    <DeveloperToken>${this.developerToken}</DeveloperToken>
+  </s:Header>
+  <s:Body>${body}</s:Body>
+</s:Envelope>`;
+        // 1. Submit download
+        const dlResp = await fetch(BULK_SOAP, {
+            method: "POST",
+            headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "DownloadCampaignsByAccountIds" },
+            body: makeEnvelope("DownloadCampaignsByAccountIds", `<DownloadCampaignsByAccountIdsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+        <AccountIds xmlns:a="http://schemas.microsoft.com/2003/10/Serialization/Arrays"><a:long>${client.account_id}</a:long></AccountIds>
+        <DataScope>EntityData</DataScope>
+        <DownloadEntities><DownloadEntity>Campaigns</DownloadEntity></DownloadEntities>
+        <DownloadFileType>Csv</DownloadFileType><FormatVersion>6.0</FormatVersion>
+      </DownloadCampaignsByAccountIdsRequest>`),
+        });
+        const dlText = await dlResp.text();
+        const requestId = dlText.match(/<DownloadRequestId>(.*?)<\/DownloadRequestId>/)?.[1];
+        if (!requestId)
+            return null;
+        // 2. Poll (max 30s)
+        let downloadUrl = null;
+        for (let i = 0; i < 6; i++) {
+            await new Promise(r => setTimeout(r, 5000));
+            const pollResp = await fetch(BULK_SOAP, {
+                method: "POST",
+                headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "GetBulkDownloadStatus" },
+                body: makeEnvelope("GetBulkDownloadStatus", `<GetBulkDownloadStatusRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13"><RequestId>${requestId}</RequestId></GetBulkDownloadStatusRequest>`),
+            });
+            const pollText = await pollResp.text();
+            const url = pollText.match(/<ResultFileUrl>(.*?)<\/ResultFileUrl>/)?.[1]?.replace(/&amp;/g, "&");
+            if (url) {
+                downloadUrl = url;
+                break;
+            }
+        }
+        if (!downloadUrl)
+            return null;
+        // 3. Download zip + parse CSV immediately
+        const fileResp = await fetch(downloadUrl);
+        const zipBuffer = Buffer.from(await fileResp.arrayBuffer());
+        // Parse zip using built-in zlib — find the CSV entry
+        // Bing returns a zip with one CSV inside; use unzipSync
+        const { unzipSync } = await import("zlib");
+        // Simple ZIP parser: find local file header, decompress
+        try {
+            // Use createWriteStream approach — simpler: spawn unzip via child_process
+            const { execSync } = await import("child_process");
+            const { writeFileSync, readFileSync, unlinkSync } = await import("fs");
+            const { tmpdir } = await import("os");
+            const { join } = await import("path");
+            const tmpZip = join(tmpdir(), `bing_bulk_${Date.now()}.zip`);
+            const tmpDir = join(tmpdir(), `bing_bulk_${Date.now()}`);
+            writeFileSync(tmpZip, zipBuffer);
+            execSync(`mkdir -p ${tmpDir} && unzip -o ${tmpZip} -d ${tmpDir}`, { stdio: "ignore" });
+            const csvFile = execSync(`find ${tmpDir} -name "*.csv"`, { encoding: "utf-8" }).trim();
+            const csvContent = readFileSync(csvFile, "utf-8").replace(/^﻿/, "");
+            execSync(`rm -rf ${tmpZip} ${tmpDir}`, { stdio: "ignore" });
+            const lines = csvContent.split("\n");
+            const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+            const idIdx = headers.indexOf("Id");
+            const typeIdx = headers.indexOf("Type");
+            const roasIdx = headers.indexOf("Bid Strategy TargetRoas");
+            for (let i = 1; i < lines.length; i++) {
+                const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+                if (cols[typeIdx] !== "Campaign" || cols[idIdx] !== campaignId)
+                    continue;
+                return cols[roasIdx] ? Math.round(parseFloat(cols[roasIdx]) * 100) / 100 : null;
+            }
+        }
+        catch {
+            return null;
+        }
+        return null;
     }
     // ============================================
     // SET CAMPAIGN BIDDING STRATEGY
@@ -714,11 +798,18 @@ class BingAdsManager {
       <Campaigns><Campaign>${schemeXml}<Id>${campaignId}</Id></Campaign></Campaigns>
     </UpdateCampaignsRequest>`;
         await this.soapCall("UpdateCampaigns", body, client);
-        // Verify the change was actually applied
+        // Verify via Bulk API (accurate for PMax + Shopping)
         const actual = await this.getCampaignActualState(client, campaignId);
         const expectedRoas = strategy.targetRoas ?? null;
-        const roasMatch = expectedRoas === null || (actual.targetRoas !== null && Math.abs(actual.targetRoas - expectedRoas) < 0.001);
+        const roasMatch = expectedRoas === null || (actual.targetRoas !== null && Math.abs(actual.targetRoas - expectedRoas) < 0.005);
         const verified = roasMatch;
+        if (!verified) {
+            await this.sendSlackAlert(`🚨 *Bing Ads — Bidding update FAILED verification*\n` +
+                `Campaign: \`${campaignId}\` (${client.name})\n` +
+                `Requested: ${strategy.type} ROAS=${strategy.targetRoas}\n` +
+                `Actual: ${actual.biddingType} ROAS=${actual.targetRoas}\n` +
+                `Action required: check campaign in Bing Ads UI`);
+        }
         return {
             success: true,
             verified,
@@ -726,7 +817,7 @@ class BingAdsManager {
             actual: { biddingType: actual.biddingType, targetRoas: actual.targetRoas },
             message: verified
                 ? `✅ Campaign ${campaignId} bidding confirmed: ${actual.biddingType}${actual.targetRoas ? ` ROAS ${Math.round(actual.targetRoas * 100)}%` : ""}`
-                : `⚠️ Campaign ${campaignId} bidding set but verification mismatch. Requested: ${strategy.type} ROAS:${strategy.targetRoas} — Actual: ${actual.biddingType} ROAS:${actual.targetRoas}`,
+                : `⚠️ Campaign ${campaignId} bidding mismatch! Requested ROAS:${strategy.targetRoas} — Actual ROAS:${actual.targetRoas}`,
         };
     }
     // ============================================
@@ -738,18 +829,52 @@ class BingAdsManager {
       <Campaigns><Campaign><Id>${campaignId}</Id><Status>${status}</Status></Campaign></Campaigns>
     </UpdateCampaignsRequest>`;
         await this.soapCall("UpdateCampaigns", body, client);
-        // Verify the status change was actually applied
-        const actual = await this.getCampaignActualState(client, campaignId);
-        const verified = actual.status === status;
+        // Verify status via SOAP (fast and accurate for status)
+        const soapBody = `<GetCampaignsByIdsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+      <AccountId>${client.account_id}</AccountId>
+      <CampaignIds xmlns:a="http://schemas.microsoft.com/2003/10/Serialization/Arrays">
+        <a:long>${campaignId}</a:long>
+      </CampaignIds>
+      <CampaignType>Search Shopping PerformanceMax DynamicSearchAds</CampaignType>
+    </GetCampaignsByIdsRequest>`;
+        const xml = await this.soapCall("GetCampaignsByIds", soapBody, client);
+        const actualStatus = xml.match(/<Status>(\w+)<\/Status>/)?.[1] ?? "Unknown";
+        const verified = actualStatus === status;
+        if (!verified) {
+            await this.sendSlackAlert(`🚨 *Bing Ads — Status update FAILED verification*\n` +
+                `Campaign: \`${campaignId}\` (${client.name})\n` +
+                `Requested: ${status}\n` +
+                `Actual: ${actualStatus}\n` +
+                `Action required: check campaign in Bing Ads UI`);
+        }
         return {
             success: true,
             verified,
             requested: status,
-            actual: actual.status,
+            actual: actualStatus,
             message: verified
-                ? `✅ Campaign ${campaignId} status confirmed: ${actual.status}`
-                : `⚠️ Campaign ${campaignId} status mismatch! Requested: ${status} — Actual: ${actual.status}`,
+                ? `✅ Campaign ${campaignId} status confirmed: ${actualStatus}`
+                : `⚠️ Campaign ${campaignId} status mismatch! Requested: ${status} — Actual: ${actualStatus}`,
         };
+    }
+    // ============================================
+    // SLACK ALERT — fires on verification failure
+    // ============================================
+    async sendSlackAlert(text) {
+        const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
+        if (!SLACK_TOKEN)
+            return; // no token configured — skip silently
+        const channels = [
+            "C0B7H9YT1C4", // #marketing-ai-debug (always)
+            "ULALR4665", // @dimapan DM (real alert)
+        ];
+        for (const channel of channels) {
+            await fetch("https://slack.com/api/chat.postMessage", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${SLACK_TOKEN}` },
+                body: JSON.stringify({ channel, text }),
+            }).catch(() => { });
+        }
     }
     // ============================================
     // ADD RESPONSIVE SEARCH AD
