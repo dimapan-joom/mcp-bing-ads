@@ -11,6 +11,10 @@ export const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "bing_ads_add_shared_negatives",
   "bing_ads_pause_keywords",
   "bing_ads_update_campaign_budget",
+  "bing_ads_set_campaign_bidding",
+  "bing_ads_set_campaign_status",
+  "bing_ads_add_responsive_search_ad",
+  "bing_ads_create_experiment",
 ]);
 
 export function isWriteTool(name: string): boolean {

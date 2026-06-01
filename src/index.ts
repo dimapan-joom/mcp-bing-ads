@@ -152,6 +152,7 @@ function getClientFromWorkingDir(config: Config, cwd: string): ClientConfig | nu
 // ============================================
 
 const CAMPAIGN_MGMT_BASE = "https://campaign.api.bingads.microsoft.com/CampaignManagement/v13";
+const CAMPAIGN_MGMT_SOAP = "https://campaign.api.bingads.microsoft.com/Api/Advertiser/CampaignManagement/v13/CampaignManagementService.svc";
 const REPORTING_BASE = "https://reporting.api.bingads.microsoft.com/Reporting/v13";
 
 class BingAdsManager {
@@ -731,6 +732,140 @@ class BingAdsManager {
 
   getConfig(): Config {
     return this.config;
+  }
+
+  // ============================================
+  // SOAP HELPER — for write operations
+  // ============================================
+
+  private async soapCall(soapAction: string, bodyXml: string, client: ClientConfig): Promise<string> {
+    const token = await this.getAccessToken();
+    const envelope = `<s:Envelope xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+  <s:Header xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+    <AuthenticationToken>${token}</AuthenticationToken>
+    <CustomerAccountId>${client.account_id}</CustomerAccountId>
+    <CustomerId>${client.customer_id}</CustomerId>
+    <DeveloperToken>${this.developerToken}</DeveloperToken>
+  </s:Header>
+  <s:Body>${bodyXml}</s:Body>
+</s:Envelope>`;
+
+    const resp = await fetch(CAMPAIGN_MGMT_SOAP, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/xml; charset=utf-8",
+        "SOAPAction": soapAction,
+      },
+      body: envelope,
+    });
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`SOAP ${soapAction} failed ${resp.status}: ${text.slice(0, 500)}`);
+    if (text.includes("<s:Fault>")) {
+      const msg = text.match(/<faultstring[^>]*>(.*?)<\/faultstring>/s)?.[1] ?? text.slice(0, 300);
+      throw new Error(`SOAP Fault in ${soapAction}: ${msg}`);
+    }
+    // Check PartialErrors
+    const partialErrors = text.match(/<PartialErrors[^>]*>(.*?)<\/PartialErrors>/s)?.[1] ?? "";
+    if (partialErrors.trim() && !partialErrors.includes('i:nil="true"') && partialErrors !== "") {
+      const errorMsg = text.match(/<Message>(.*?)<\/Message>/)?.[1] ?? partialErrors.slice(0, 200);
+      throw new Error(`Bing Ads partial error in ${soapAction}: ${errorMsg}`);
+    }
+    return text;
+  }
+
+  // ============================================
+  // SET CAMPAIGN BIDDING STRATEGY
+  // ============================================
+
+  async setCampaignBidding(client: ClientConfig, campaignId: string, strategy: {
+    type: "TargetRoas" | "TargetCpa" | "MaxConversions" | "MaxClicks" | "ManualCpc";
+    targetRoas?: number;      // e.g. 0.85 = 85% ROAS
+    targetCpa?: number;       // e.g. 5.00 = $5 CPA
+    maxCpc?: number;          // optional cap for TargetRoas/TargetCpa
+  }): Promise<{ success: boolean; message: string }> {
+    let schemeXml: string;
+    const maxCpcXml = strategy.maxCpc
+      ? `<MaxCpc><Amount>${strategy.maxCpc}</Amount></MaxCpc>`
+      : `<MaxCpc i:nil="true"/>`;
+
+    switch (strategy.type) {
+      case "TargetRoas":
+        schemeXml = `<BiddingScheme i:type="TargetRoasBiddingScheme">${maxCpcXml}<TargetRoas>${strategy.targetRoas}</TargetRoas></BiddingScheme>`;
+        break;
+      case "TargetCpa":
+        schemeXml = `<BiddingScheme i:type="TargetCpaBiddingScheme">${maxCpcXml}<TargetCpa>${strategy.targetCpa}</TargetCpa></BiddingScheme>`;
+        break;
+      case "MaxConversions":
+        schemeXml = `<BiddingScheme i:type="MaxConversionsBiddingScheme">${maxCpcXml}</BiddingScheme>`;
+        break;
+      case "MaxClicks":
+        schemeXml = `<BiddingScheme i:type="MaxClicksBiddingScheme">${maxCpcXml}</BiddingScheme>`;
+        break;
+      case "ManualCpc":
+        schemeXml = `<BiddingScheme i:type="ManualCpcBiddingScheme"/>`;
+        break;
+    }
+
+    const body = `<UpdateCampaignsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+      <AccountId>${client.account_id}</AccountId>
+      <Campaigns><Campaign>${schemeXml}<Id>${campaignId}</Id></Campaign></Campaigns>
+    </UpdateCampaignsRequest>`;
+
+    await this.soapCall("UpdateCampaigns", body, client);
+    return { success: true, message: `Campaign ${campaignId} bidding updated to ${strategy.type}${strategy.targetRoas ? ` (ROAS: ${strategy.targetRoas})` : ""}${strategy.targetCpa ? ` (CPA: $${strategy.targetCpa})` : ""}` };
+  }
+
+  // ============================================
+  // SET CAMPAIGN STATUS
+  // ============================================
+
+  async setCampaignStatus(client: ClientConfig, campaignId: string, status: "Active" | "Paused"): Promise<{ success: boolean; message: string }> {
+    const body = `<UpdateCampaignsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+      <AccountId>${client.account_id}</AccountId>
+      <Campaigns><Campaign><Id>${campaignId}</Id><Status>${status}</Status></Campaign></Campaigns>
+    </UpdateCampaignsRequest>`;
+    await this.soapCall("UpdateCampaigns", body, client);
+    return { success: true, message: `Campaign ${campaignId} status set to ${status}` };
+  }
+
+  // ============================================
+  // ADD RESPONSIVE SEARCH AD
+  // ============================================
+
+  async addResponsiveSearchAd(client: ClientConfig, adGroupId: string, ad: {
+    headlines: string[];          // 3-15 headlines, max 30 chars each
+    descriptions: string[];       // 2-4 descriptions, max 90 chars each
+    finalUrl: string;
+    path1?: string;               // URL path display text
+    path2?: string;
+  }): Promise<{ success: boolean; adId?: string; message: string }> {
+    const headlinesXml = ad.headlines.map((h, i) =>
+      `<AssetLink><Asset i:type="TextAsset"><Text>${h.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</Text></Asset><PinnedField i:nil="true"/><AssetPerformanceLabel>Unrated</AssetPerformanceLabel></AssetLink>`
+    ).join("");
+    const descriptionsXml = ad.descriptions.map(d =>
+      `<AssetLink><Asset i:type="TextAsset"><Text>${d.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</Text></Asset><PinnedField i:nil="true"/><AssetPerformanceLabel>Unrated</AssetPerformanceLabel></AssetLink>`
+    ).join("");
+    const path1Xml = ad.path1 ? `<Path1>${ad.path1}</Path1>` : "";
+    const path2Xml = ad.path2 ? `<Path2>${ad.path2}</Path2>` : "";
+
+    const body = `<AddAdsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+      <AdGroupId>${adGroupId}</AdGroupId>
+      <Ads>
+        <Ad i:type="ResponsiveSearchAd">
+          <FinalUrls xmlns:a="http://schemas.microsoft.com/2003/10/Serialization/Arrays">
+            <a:string>${ad.finalUrl}</a:string>
+          </FinalUrls>
+          <Status>Active</Status>
+          <Descriptions>${descriptionsXml}</Descriptions>
+          <Headlines>${headlinesXml}</Headlines>
+          ${path1Xml}${path2Xml}
+        </Ad>
+      </Ads>
+    </AddAdsRequest>`;
+
+    const result = await this.soapCall("AddAds", body, client);
+    const adId = result.match(/<long>(\d+)<\/long>/)?.[1];
+    return { success: true, adId, message: `RSA created in ad group ${adGroupId}${adId ? ` with ID ${adId}` : ""}` };
   }
 
   // ============================================
@@ -1342,6 +1477,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify(result, null, 2),
           }],
         };
+      }
+
+      case "bing_ads_set_campaign_bidding": {
+        assertWriteAllowed("bing_ads_set_campaign_bidding");
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.setCampaignBidding(client, args?.campaign_id as string, {
+          type: args?.strategy_type as any,
+          targetRoas: args?.target_roas as number | undefined,
+          targetCpa: args?.target_cpa as number | undefined,
+          maxCpc: args?.max_cpc as number | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "bing_ads_set_campaign_status": {
+        assertWriteAllowed("bing_ads_set_campaign_status");
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.setCampaignStatus(client, args?.campaign_id as string, args?.status as "Active" | "Paused");
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case "bing_ads_add_responsive_search_ad": {
+        assertWriteAllowed("bing_ads_add_responsive_search_ad");
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.addResponsiveSearchAd(client, args?.ad_group_id as string, {
+          headlines: args?.headlines as string[],
+          descriptions: args?.descriptions as string[],
+          finalUrl: args?.final_url as string,
+          path1: args?.path1 as string | undefined,
+          path2: args?.path2 as string | undefined,
+        });
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       case "bing_ads_get_spend_by_hour": {

@@ -161,6 +161,74 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "bing_ads_set_campaign_bidding",
+    description: `Change bidding strategy for a campaign. Supports Target ROAS, Target CPA, Maximize Conversions, Maximize Clicks, Manual CPC.
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+        campaign_id: { type: "string", description: "Numeric campaign ID" },
+        strategy_type: {
+          type: "string",
+          enum: ["TargetRoas", "TargetCpa", "MaxConversions", "MaxClicks", "ManualCpc"],
+          description: "Bidding strategy type",
+        },
+        target_roas: { type: "number", description: "Target ROAS (e.g. 0.85 = 85%). Required for TargetRoas." },
+        target_cpa: { type: "number", description: "Target CPA in account currency (e.g. 5.00). Required for TargetCpa." },
+        max_cpc: { type: "number", description: "Optional max CPC cap in account currency." },
+      },
+      required: ["campaign_id", "strategy_type"],
+    },
+  },
+  {
+    name: "bing_ads_set_campaign_status",
+    description: "Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+        campaign_id: { type: "string", description: "Numeric campaign ID" },
+        status: { type: "string", enum: ["Active", "Paused"], description: "New status" },
+      },
+      required: ["campaign_id", "status"],
+    },
+  },
+  {
+    name: "bing_ads_add_responsive_search_ad",
+    description: `Add a new Responsive Search Ad (RSA) to an ad group. Use this to create text ad variations for A/B testing.
+Requires 3-15 headlines (max 30 chars each) and 2-4 descriptions (max 90 chars each).
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+        ad_group_id: { type: "string", description: "Numeric ad group ID (use bing_ads_list_ad_groups to find)" },
+        headlines: {
+          type: "array",
+          items: { type: "string" },
+          description: "3-15 headlines, max 30 chars each. Google will mix and match.",
+          minItems: 3,
+          maxItems: 15,
+        },
+        descriptions: {
+          type: "array",
+          items: { type: "string" },
+          description: "2-4 descriptions, max 90 chars each.",
+          minItems: 2,
+          maxItems: 4,
+        },
+        final_url: { type: "string", description: "Landing page URL" },
+        path1: { type: "string", description: "Optional display URL path 1 (max 15 chars)" },
+        path2: { type: "string", description: "Optional display URL path 2 (max 15 chars)" },
+      },
+      required: ["ad_group_id", "headlines", "descriptions", "final_url"],
+    },
+  },
+  {
     name: "bing_ads_get_spend_by_hour",
     description: "Get spend, clicks, CPC broken down by hour of day for a given date. Use two dates (today + yesterday) to compare and detect anomalies. TimePeriod = 0-23 (hour).",
     inputSchema: {
