@@ -228,7 +228,8 @@ class BingAdsManager {
         const url = `${CAMPAIGN_MGMT_BASE}/Campaigns/QueryByAccountId`;
         const body = {
             AccountId: client.account_id,
-            CampaignType: "Search",
+            // Fetch all campaign types: Search, Shopping, PerformanceMax, DynamicSearchAds, etc.
+            CampaignType: "Search Shopping PerformanceMax DynamicSearchAds",
         };
         return await this.apiCall(url, body, client, "listCampaigns");
     }
