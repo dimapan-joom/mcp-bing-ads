@@ -161,6 +161,84 @@ export const tools: Tool[] = [
     },
   },
   {
+    name: "bing_ads_get_spend_by_hour",
+    description: "Get spend, clicks, CPC broken down by hour of day for a given date. Use two dates (today + yesterday) to compare and detect anomalies. TimePeriod = 0-23 (hour).",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        date: { type: "string", description: "Date in YYYY-MM-DD format" },
+        campaign_ids: { type: "array", items: { type: "string" }, description: "Optional: filter to specific campaign IDs" },
+      },
+      required: ["date"],
+    },
+  },
+  {
+    name: "bing_ads_get_budget_pacing",
+    description: "Check budget pacing for all active campaigns: actual spend vs expected linear pace for the month. Returns pacing %, gap, and status (on_track / underpacing / overpacing).",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+        month_start: { type: "string", description: "First day of month YYYY-MM-DD" },
+        month_end: { type: "string", description: "Last day of month YYYY-MM-DD" },
+      },
+      required: ["month_start", "month_end"],
+    },
+  },
+  {
+    name: "bing_ads_get_disapproved_ads",
+    description: "Find ads with Inactive/Disapproved status in the account. Returns ads with 0 impressions and 0 spend grouped by campaign — these are likely disapproved or paused.",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "bing_ads_get_recommendations",
+    description: "Get budget and optimization recommendations for the account. Analyzes current budget pacing to identify campaigns that are budget-limited (should increase budget) or severely underpacing (should reduce or review budget).",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "bing_ads_get_experiments",
+    description: "List all A/B experiments (ad variation tests) in the account with their status, traffic split, and associated campaigns.",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "bing_ads_create_experiment",
+    description: "Create an A/B experiment for a Search campaign to test ad variations. Splits traffic between the base campaign and an experiment copy. Only works for Search campaigns (not Shopping/PMax). ⚠️ This creates a new campaign — confirm with user before calling.",
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string" },
+        name: { type: "string", description: "Experiment name" },
+        base_campaign_id: { type: "string", description: "ID of the base Search campaign to test against" },
+        split_percent: { type: "number", description: "% of traffic going to experiment (1-99, e.g. 50 for 50/50)" },
+        start_date: { type: "string", description: "Start date YYYY-MM-DD (optional)" },
+        end_date: { type: "string", description: "End date YYYY-MM-DD (optional)" },
+      },
+      required: ["name", "base_campaign_id", "split_percent"],
+    },
+  },
+  {
     name: "bing_ads_get_merchant_center_health",
     description: `Get Bing Merchant Center feed health for all active stores: published vs rejected product counts per catalog,
 overall reject percentage, and a sampled analysis of likely rejection causes (missing GTIN/brand, short titles, invalid prices, etc.).

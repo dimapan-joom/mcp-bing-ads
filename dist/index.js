@@ -616,6 +616,201 @@ class BingAdsManager {
         return this.config;
     }
     // ============================================
+    // HOURLY SPEND / CPC BY HOUR
+    // ============================================
+    async getSpendByHour(client, date, campaignIds) {
+        const [year, month, day] = date.split("-").map(Number);
+        const reportRequest = {
+            Type: "CampaignPerformanceReportRequest",
+            Format: "Csv",
+            ReportName: "SpendByHour",
+            Aggregation: "HourOfDay",
+            Columns: ["TimePeriod", "CampaignName", "CampaignId", "Spend", "Clicks", "Impressions", "Conversions", "AverageCpc"],
+            Scope: { AccountIds: [parseInt(client.account_id)] },
+            Time: {
+                CustomDateRangeStart: { Year: year, Month: month, Day: day },
+                CustomDateRangeEnd: { Year: year, Month: month, Day: day },
+            },
+        };
+        if (campaignIds?.length) {
+            reportRequest.Scope.Campaigns = campaignIds.map(id => ({
+                AccountId: parseInt(client.account_id),
+                CampaignId: parseInt(id),
+            }));
+        }
+        const requestId = await this.submitReport(client, reportRequest);
+        const rows = await this.waitForReport(client, requestId);
+        return rows.map(r => ({
+            hour: parseInt(r["TimePeriod"] ?? "0"),
+            campaign_name: r["CampaignName"],
+            campaign_id: r["CampaignId"],
+            spend: parseFloat(r["Spend"] ?? "0"),
+            clicks: parseInt(r["Clicks"] ?? "0"),
+            impressions: parseInt(r["Impressions"] ?? "0"),
+            conversions: parseFloat(r["Conversions"] ?? "0"),
+            avg_cpc: parseFloat(r["AverageCpc"] ?? "0"),
+        }));
+    }
+    // ============================================
+    // BUDGET PACING
+    // ============================================
+    async getBudgetPacing(client, monthStart, monthEnd) {
+        const [sy, sm, sd] = monthStart.split("-").map(Number);
+        const [ey, em, ed] = monthEnd.split("-").map(Number);
+        const reportRequest = {
+            Type: "BudgetSummaryReportRequest",
+            Format: "Csv",
+            ReportName: "BudgetPacing",
+            Columns: ["AccountName", "CampaignName", "CampaignId", "CampaignStatus", "DailySpend", "MonthlyBudget", "MonthToDateSpend"],
+            Scope: { AccountIds: [parseInt(client.account_id)] },
+            Time: {
+                CustomDateRangeStart: { Year: sy, Month: sm, Day: sd },
+                CustomDateRangeEnd: { Year: ey, Month: em, Day: ed },
+            },
+        };
+        const requestId = await this.submitReport(client, reportRequest);
+        const rows = await this.waitForReport(client, requestId);
+        return rows
+            .filter(r => r["CampaignStatus"] === "Active")
+            .map(r => {
+            const monthly = parseFloat(r["MonthlyBudget"] ?? "0");
+            const spent = parseFloat(r["MonthToDateSpend"] ?? "0");
+            const daily = parseFloat(r["DailySpend"] ?? "0");
+            // Days elapsed = today - start of month
+            const today = new Date();
+            const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+            const daysElapsed = Math.max(1, Math.floor((today.getTime() - startOfMonth.getTime()) / 86400000));
+            const daysTotal = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+            const expectedSpend = monthly > 0 ? (monthly / daysTotal) * daysElapsed : 0;
+            const pacingPct = expectedSpend > 0 ? Math.round(spent / expectedSpend * 100) : 0;
+            const status = pacingPct >= 110 ? "overpacing" : pacingPct >= 85 ? "on_track" : pacingPct >= 50 ? "underpacing" : "severely_underpacing";
+            return {
+                campaign_name: r["CampaignName"],
+                campaign_id: r["CampaignId"],
+                daily_budget: daily,
+                monthly_budget: monthly,
+                month_to_date_spend: spent,
+                expected_spend: Math.round(expectedSpend * 100) / 100,
+                pacing_pct: pacingPct,
+                status,
+                budget_gap: Math.round((expectedSpend - spent) * 100) / 100,
+            };
+        })
+            .sort((a, b) => Math.abs(b.budget_gap) - Math.abs(a.budget_gap));
+    }
+    // ============================================
+    // DISAPPROVED ADS
+    // ============================================
+    async getDisapprovedAds(client) {
+        // Use Ad Performance report to find ads with editorial issues
+        const reportRequest = {
+            Type: "AdPerformanceReportRequest",
+            Format: "Csv",
+            ReportName: "DisapprovedAds",
+            Aggregation: "Summary",
+            Columns: ["CampaignName", "AdGroupName", "AdId", "AdType", "Impressions", "Clicks", "Spend"],
+            Filter: { AdStatus: ["Inactive"] },
+            Scope: { AccountIds: [parseInt(client.account_id)] },
+            Time: { PredefinedTime: "LastMonth" },
+        };
+        const requestId = await this.submitReport(client, reportRequest);
+        const rows = await this.waitForReport(client, requestId);
+        // Also query campaign management for editorial status
+        const editorialRows = rows
+            .filter(r => parseInt(r["Impressions"] ?? "0") === 0 && parseFloat(r["Spend"] ?? "0") === 0)
+            .slice(0, 200)
+            .map(r => ({
+            campaign_name: r["CampaignName"],
+            ad_group_name: r["AdGroupName"],
+            ad_id: r["AdId"],
+            ad_type: r["AdType"],
+            impressions: parseInt(r["Impressions"] ?? "0"),
+            clicks: parseInt(r["Clicks"] ?? "0"),
+            spend: parseFloat(r["Spend"] ?? "0"),
+            likely_status: "Inactive/Disapproved",
+        }));
+        // Group by campaign for summary
+        const byCampaign = {};
+        editorialRows.forEach(r => {
+            byCampaign[r.campaign_name] = (byCampaign[r.campaign_name] ?? 0) + 1;
+        });
+        return editorialRows;
+    }
+    // ============================================
+    // BING RECOMMENDATIONS (via Budget analysis)
+    // ============================================
+    async getRecommendations(client) {
+        // Since Bing REST API doesn't expose recommendations directly,
+        // we generate them by analyzing budget pacing and performance
+        const today = new Date();
+        const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+        const monthEnd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const pacing = await this.getBudgetPacing(client, monthStart, monthEnd);
+        const recommendations = [];
+        for (const camp of pacing) {
+            // Budget limited campaigns
+            if (camp.pacing_pct >= 98 && camp.daily_budget > 0) {
+                const suggested = Math.round(camp.daily_budget * 1.3 * 100) / 100;
+                recommendations.push({
+                    type: "INCREASE_BUDGET",
+                    severity: "high",
+                    campaign_name: camp.campaign_name,
+                    campaign_id: camp.campaign_id,
+                    current_daily_budget: camp.daily_budget,
+                    suggested_daily_budget: suggested,
+                    reason: `Campaign is at ${camp.pacing_pct}% of expected pace — likely budget-limited. Increase budget by 30% to capture more traffic.`,
+                });
+            }
+            // Severely underpacing (wasted budget allocation)
+            if (camp.pacing_pct < 30 && camp.monthly_budget > 100) {
+                recommendations.push({
+                    type: "REVIEW_BUDGET",
+                    severity: "medium",
+                    campaign_name: camp.campaign_name,
+                    campaign_id: camp.campaign_id,
+                    current_daily_budget: camp.daily_budget,
+                    month_to_date_spend: camp.month_to_date_spend,
+                    monthly_budget: camp.monthly_budget,
+                    reason: `Campaign is only ${camp.pacing_pct}% paced — spending far below budget. Consider reducing budget or checking campaign settings.`,
+                });
+            }
+        }
+        // Sort by severity
+        return recommendations.sort((a, b) => (a.severity === "high" ? -1 : 1));
+    }
+    // ============================================
+    // EXPERIMENTS (A/B TESTS)
+    // ============================================
+    async getExperiments(client) {
+        // Query experiments via Campaign Management API
+        const url = `${CAMPAIGN_MGMT_BASE}/Experiments/QueryByAccountId`;
+        try {
+            const result = await this.apiCall(url, { PageInfo: { Index: 0, Size: 50 } }, client, "getExperiments");
+            return result?.Experiments ?? [];
+        }
+        catch {
+            return [];
+        }
+    }
+    async createExperiment(client, options) {
+        const url = `${CAMPAIGN_MGMT_BASE}/Experiments/Add`;
+        const experiment = {
+            Name: options.name,
+            BaseCampaignId: parseInt(options.baseCampaignId),
+            TrafficSplitPercent: options.splitPercent,
+            ExperimentType: "TrafficBased",
+        };
+        if (options.startDate) {
+            const [y, m, d] = options.startDate.split("-").map(Number);
+            experiment.StartDate = { Year: y, Month: m, Day: d };
+        }
+        if (options.endDate) {
+            const [y, m, d] = options.endDate.split("-").map(Number);
+            experiment.EndDate = { Year: y, Month: m, Day: d };
+        }
+        return await this.apiCall(url, { Experiments: [experiment] }, client, "createExperiment");
+    }
+    // ============================================
     // MERCHANT CENTER HEALTH
     // ============================================
     async getMerchantCenterHealth(client) {
@@ -935,6 +1130,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             text: JSON.stringify(result, null, 2),
                         }],
                 };
+            }
+            case "bing_ads_get_spend_by_hour": {
+                const client = resolveClient(args?.account_id);
+                const result = await adsManager.getSpendByHour(client, args?.date, args?.campaign_ids);
+                return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+            }
+            case "bing_ads_get_budget_pacing": {
+                const client = resolveClient(args?.account_id);
+                const result = await adsManager.getBudgetPacing(client, args?.month_start, args?.month_end);
+                return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+            }
+            case "bing_ads_get_disapproved_ads": {
+                const client = resolveClient(args?.account_id);
+                const result = await adsManager.getDisapprovedAds(client);
+                return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+            }
+            case "bing_ads_get_recommendations": {
+                const client = resolveClient(args?.account_id);
+                const result = await adsManager.getRecommendations(client);
+                return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+            }
+            case "bing_ads_get_experiments": {
+                const client = resolveClient(args?.account_id);
+                const result = await adsManager.getExperiments(client);
+                return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+            }
+            case "bing_ads_create_experiment": {
+                const client = resolveClient(args?.account_id);
+                const result = await adsManager.createExperiment(client, {
+                    name: args?.name,
+                    baseCampaignId: args?.base_campaign_id,
+                    splitPercent: args?.split_percent,
+                    startDate: args?.start_date,
+                    endDate: args?.end_date,
+                });
+                return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
             }
             case "bing_ads_get_merchant_center_health": {
                 const client = resolveClient(args?.account_id);
