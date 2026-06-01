@@ -100,7 +100,30 @@ interface Config {
 
 function loadConfig(): Config {
   const configPath = join(dirname(new URL(import.meta.url).pathname), "..", "config.json");
+
+  // Fall back to env vars if config.json is not present (e.g. when running via npx)
   if (!existsSync(configPath)) {
+    const token = envTrimmed("BING_ADS_DEVELOPER_TOKEN");
+    const clientId = envTrimmed("BING_ADS_CLIENT_ID");
+    const clientSecret = envTrimmed("BING_ADS_CLIENT_SECRET");
+    const refreshToken = envTrimmed("BING_ADS_REFRESH_TOKEN");
+
+    if (token && clientId && refreshToken) {
+      return {
+        clients: {
+          default: {
+            developer_token: token,
+            client_id: clientId,
+            client_secret: clientSecret,
+            refresh_token: refreshToken,
+            account_id: envTrimmed("BING_ADS_ACCOUNT_ID"),
+            customer_id: envTrimmed("BING_ADS_CUSTOMER_ID"),
+            folder: "/",
+          },
+        },
+      };
+    }
+
     throw new Error(
       `Config file not found at ${configPath}. Create config.json from config.example.json with your client entries, ` +
         `or set env vars BING_ADS_DEVELOPER_TOKEN, BING_ADS_CLIENT_ID, BING_ADS_CLIENT_SECRET, and BING_ADS_REFRESH_TOKEN. ` +
