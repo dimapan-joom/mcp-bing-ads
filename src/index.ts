@@ -288,11 +288,17 @@ class BingAdsManager {
 
   async listCampaigns(client: ClientConfig): Promise<any> {
     const url = `${CAMPAIGN_MGMT_BASE}/Campaigns/QueryByAccountId`;
-    const body = {
-      AccountId: client.account_id,
-      // Omitting CampaignType returns all types (Search, Shopping, PerformanceMax, etc.)
-    };
-    return await this.apiCall(url, body, client, "listCampaigns");
+    // The Bing Ads API requires an explicit CampaignType — omitting it returns nothing.
+    // We query all relevant types in parallel and merge the results.
+    const types = ["Search", "Shopping", "PerformanceMax", "DynamicSearchAds"];
+    const results = await Promise.all(
+      types.map(type =>
+        this.apiCall(url, { AccountId: client.account_id, CampaignType: type }, client, "listCampaigns")
+          .catch(() => ({ Campaigns: [] }))
+      )
+    );
+    const allCampaigns = results.flatMap(r => r?.Campaigns ?? []);
+    return { Campaigns: allCampaigns };
   }
 
   async listAdGroups(client: ClientConfig, campaignId: string): Promise<any> {
