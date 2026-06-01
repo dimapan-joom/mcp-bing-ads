@@ -1,0 +1,27 @@
+{
+  "oauth": {
+    "client_id": "",
+    "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    "scope": "https://ads.microsoft.com/msads.manage offline_access"
+  },
+  "clients": {
+    "joom": {
+      "customer_id": "252992655",
+      "account_id": "138371118",
+      "name": "SIA Joom",
+      "folder": "/Users/dimapan/claude-code-project"
+    },
+    "ayzeze": {
+      "customer_id": "252992655",
+      "account_id": "138977563",
+      "name": "Ayzeze",
+      "folder": "/Users/dimapan/ayzeze"
+    },
+    "joompulse": {
+      "customer_id": "252992655",
+      "account_id": "189131283",
+      "name": "JoomPulse",
+      "folder": "/Users/dimapan/joompulse"
+    }
+  }
+}
