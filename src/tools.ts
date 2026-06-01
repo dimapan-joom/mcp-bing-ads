@@ -160,4 +160,19 @@ export const tools: Tool[] = [
       required: ["campaign_id", "daily_budget"],
     },
   },
+  {
+    name: "bing_ads_get_merchant_center_health",
+    description: `Get Bing Merchant Center feed health for all active stores: published vs rejected product counts per catalog,
+overall reject percentage, and a sampled analysis of likely rejection causes (missing GTIN/brand, short titles, invalid prices, etc.).
+
+Note: Bing Content API does not expose individual rejection reasons — the 'sampledIssues' field is based on
+analysis of 200 sampled products per store to identify common data quality issues that typically cause rejections.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+      },
+    },
+  },
 ];

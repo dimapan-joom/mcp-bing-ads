@@ -732,6 +732,153 @@ class BingAdsManager {
   getConfig(): Config {
     return this.config;
   }
+
+  // ============================================
+  // MERCHANT CENTER HEALTH
+  // ============================================
+
+  async getMerchantCenterHealth(client: ClientConfig): Promise<any> {
+    const accessToken = await this.getAccessToken();
+    const customerId = client.customer_id || "252992655";
+
+    const contentHeaders = {
+      "AuthenticationToken": accessToken,
+      "DeveloperToken": this.developerToken,
+      "CustomerId": customerId,
+    };
+
+    // 1. Get all BMC stores for this customer
+    const storesResp = await this.apiCall(
+      `${CAMPAIGN_MGMT_BASE}/BMCStores/QueryByCustomerId`,
+      {},
+      client,
+      "getMerchantCenterHealth"
+    );
+    const stores = storesResp?.BMCStores ?? [];
+
+    const results: any[] = [];
+
+    for (const store of stores) {
+      const storeId = store.Id;
+      const storeName = store.Name;
+      if (!store.IsActive || !store.HasCatalog) continue;
+
+      // 2. Get catalogs for this store
+      let catalogs: any[] = [];
+      try {
+        const catResp = await fetch(
+          `https://content.api.bingads.microsoft.com/shopping/v9.1/bmc/${storeId}/catalogs`,
+          { headers: contentHeaders }
+        );
+        const catData = await catResp.json() as any;
+        catalogs = catData?.catalogs ?? [];
+      } catch { continue; }
+
+      let totalPublished = 0;
+      let totalRejected = 0;
+      const catalogDetails: any[] = [];
+
+      // 3. Get status per catalog
+      for (const cat of catalogs) {
+        if (!cat.isPublishingEnabled) continue;
+        try {
+          const statusResp = await fetch(
+            `https://content.api.bingads.microsoft.com/shopping/v9.1/bmc/${storeId}/catalogs/${cat.id}/status`,
+            { headers: contentHeaders }
+          );
+          const statusData = await statusResp.json() as any;
+          const pub = statusData?.publishedCount ?? 0;
+          const rej = statusData?.rejectedCount ?? 0;
+          if (pub > 0 || rej > 0) {
+            totalPublished += pub;
+            totalRejected += rej;
+            catalogDetails.push({
+              catalogId: cat.id,
+              catalogName: cat.name,
+              published: pub,
+              rejected: rej,
+              rejectPct: pub + rej > 0 ? Math.round(rej / (pub + rej) * 1000) / 10 : 0,
+            });
+          }
+        } catch { /* skip */ }
+      }
+
+      if (totalPublished === 0 && totalRejected === 0) continue;
+
+      const total = totalPublished + totalRejected;
+      const rejectPct = total > 0 ? Math.round(totalRejected / total * 1000) / 10 : 0;
+
+      // 4. Sample products to identify common issue patterns
+      const issues: Record<string, number> = {};
+      try {
+        const prodResp = await fetch(
+          `https://content.api.bingads.microsoft.com/shopping/v9.1/bmc/${storeId}/products?max-results=200`,
+          { headers: contentHeaders }
+        );
+        const prodData = await prodResp.json() as any;
+        const products: any[] = prodData?.resources ?? [];
+
+        for (const p of products) {
+          // Check for common rejection-causing issues
+          if (!p.gtin && !p.mpn && p.identifierExists !== "False") {
+            issues["missing_identifier"] = (issues["missing_identifier"] ?? 0) + 1;
+          }
+          if (!p.brand || p.brand === "") {
+            issues["missing_brand"] = (issues["missing_brand"] ?? 0) + 1;
+          }
+          if (p.title && p.title.length < 20) {
+            issues["short_title"] = (issues["short_title"] ?? 0) + 1;
+          }
+          if (!p.imageLink || p.imageLink === "") {
+            issues["missing_image"] = (issues["missing_image"] ?? 0) + 1;
+          }
+          if (!p.description || p.description.length < 50) {
+            issues["short_description"] = (issues["short_description"] ?? 0) + 1;
+          }
+          if (!p.price?.value || p.price.value <= 0) {
+            issues["invalid_price"] = (issues["invalid_price"] ?? 0) + 1;
+          }
+          if (p.availability === "out of stock" || p.availability === "preorder") {
+            issues["non_in_stock"] = (issues["non_in_stock"] ?? 0) + 1;
+          }
+          if (p.excludedDestinations && p.excludedDestinations.length > 0) {
+            issues["excluded_from_destinations"] = (issues["excluded_from_destinations"] ?? 0) + 1;
+          }
+        }
+      } catch { /* sampling failed, skip */ }
+
+      results.push({
+        storeId,
+        storeName,
+        totalPublished,
+        totalRejected,
+        totalProducts: total,
+        rejectPct,
+        status: rejectPct >= 10 ? "🔴 high" : rejectPct >= 5 ? "🟠 elevated" : rejectPct >= 2 ? "🟡 moderate" : "✅ healthy",
+        catalogs: catalogDetails,
+        sampledIssues: Object.entries(issues)
+          .sort(([, a], [, b]) => b - a)
+          .map(([type, count]) => ({ type, count })),
+      });
+    }
+
+    // Sort by rejected count desc
+    results.sort((a, b) => b.totalRejected - a.totalRejected);
+
+    const grandTotal = results.reduce((s, r) => s + r.totalProducts, 0);
+    const grandRejected = results.reduce((s, r) => s + r.totalRejected, 0);
+
+    return {
+      summary: {
+        totalStores: results.length,
+        totalProducts: grandTotal,
+        totalRejected: grandRejected,
+        overallRejectPct: grandTotal > 0 ? Math.round(grandRejected / grandTotal * 1000) / 10 : 0,
+        note: "Rejection reasons are not exposed by Bing Content API. 'sampledIssues' is an analysis of 200 products per store to identify likely causes.",
+      },
+      stores: results,
+    };
+  }
 }
 
 // ============================================
@@ -954,6 +1101,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.campaign_id as string,
           args?.daily_budget as number,
         );
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          }],
+        };
+      }
+
+      case "bing_ads_get_merchant_center_health": {
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.getMerchantCenterHealth(client);
         return {
           content: [{
             type: "text",
