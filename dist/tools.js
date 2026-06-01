@@ -158,4 +158,165 @@ export const tools = [
             required: ["campaign_id", "daily_budget"],
         },
     },
+    {
+        name: "bing_ads_set_campaign_bidding",
+        description: `Change bidding strategy for a campaign. Supports Target ROAS, Target CPA, Maximize Conversions, Maximize Clicks, Manual CPC.
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+                campaign_id: { type: "string", description: "Numeric campaign ID" },
+                strategy_type: {
+                    type: "string",
+                    enum: ["TargetRoas", "TargetCpa", "MaxConversions", "MaxClicks", "ManualCpc"],
+                    description: "Bidding strategy type",
+                },
+                target_roas: { type: "number", description: "Target ROAS (e.g. 0.85 = 85%). Required for TargetRoas." },
+                target_cpa: { type: "number", description: "Target CPA in account currency (e.g. 5.00). Required for TargetCpa." },
+                max_cpc: { type: "number", description: "Optional max CPC cap in account currency." },
+            },
+            required: ["campaign_id", "strategy_type"],
+        },
+    },
+    {
+        name: "bing_ads_set_campaign_status",
+        description: "Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.",
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+                campaign_id: { type: "string", description: "Numeric campaign ID" },
+                status: { type: "string", enum: ["Active", "Paused"], description: "New status" },
+            },
+            required: ["campaign_id", "status"],
+        },
+    },
+    {
+        name: "bing_ads_add_responsive_search_ad",
+        description: `Add a new Responsive Search Ad (RSA) to an ad group. Use this to create text ad variations for A/B testing.
+Requires 3-15 headlines (max 30 chars each) and 2-4 descriptions (max 90 chars each).
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+                ad_group_id: { type: "string", description: "Numeric ad group ID (use bing_ads_list_ad_groups to find)" },
+                headlines: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "3-15 headlines, max 30 chars each. Google will mix and match.",
+                    minItems: 3,
+                    maxItems: 15,
+                },
+                descriptions: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "2-4 descriptions, max 90 chars each.",
+                    minItems: 2,
+                    maxItems: 4,
+                },
+                final_url: { type: "string", description: "Landing page URL" },
+                path1: { type: "string", description: "Optional display URL path 1 (max 15 chars)" },
+                path2: { type: "string", description: "Optional display URL path 2 (max 15 chars)" },
+            },
+            required: ["ad_group_id", "headlines", "descriptions", "final_url"],
+        },
+    },
+    {
+        name: "bing_ads_get_spend_by_hour",
+        description: "Get spend, clicks, CPC broken down by hour of day for a given date. Use two dates (today + yesterday) to compare and detect anomalies. TimePeriod = 0-23 (hour).",
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+                date: { type: "string", description: "Date in YYYY-MM-DD format" },
+                campaign_ids: { type: "array", items: { type: "string" }, description: "Optional: filter to specific campaign IDs" },
+            },
+            required: ["date"],
+        },
+    },
+    {
+        name: "bing_ads_get_budget_pacing",
+        description: "Check budget pacing for all active campaigns: actual spend vs expected linear pace for the month. Returns pacing %, gap, and status (on_track / underpacing / overpacing).",
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+                month_start: { type: "string", description: "First day of month YYYY-MM-DD" },
+                month_end: { type: "string", description: "Last day of month YYYY-MM-DD" },
+            },
+            required: ["month_start", "month_end"],
+        },
+    },
+    {
+        name: "bing_ads_get_disapproved_ads",
+        description: "Find ads with Inactive/Disapproved status in the account. Returns ads with 0 impressions and 0 spend grouped by campaign — these are likely disapproved or paused.",
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+            },
+        },
+    },
+    {
+        name: "bing_ads_get_recommendations",
+        description: "Get budget and optimization recommendations for the account. Analyzes current budget pacing to identify campaigns that are budget-limited (should increase budget) or severely underpacing (should reduce or review budget).",
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+            },
+        },
+    },
+    {
+        name: "bing_ads_get_experiments",
+        description: "List all A/B experiments (ad variation tests) in the account with their status, traffic split, and associated campaigns.",
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+            },
+        },
+    },
+    {
+        name: "bing_ads_create_experiment",
+        description: "Create an A/B experiment for a Search campaign to test ad variations. Splits traffic between the base campaign and an experiment copy. Only works for Search campaigns (not Shopping/PMax). ⚠️ This creates a new campaign — confirm with user before calling.",
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string" },
+                name: { type: "string", description: "Experiment name" },
+                base_campaign_id: { type: "string", description: "ID of the base Search campaign to test against" },
+                split_percent: { type: "number", description: "% of traffic going to experiment (1-99, e.g. 50 for 50/50)" },
+                start_date: { type: "string", description: "Start date YYYY-MM-DD (optional)" },
+                end_date: { type: "string", description: "End date YYYY-MM-DD (optional)" },
+            },
+            required: ["name", "base_campaign_id", "split_percent"],
+        },
+    },
+    {
+        name: "bing_ads_get_merchant_center_health",
+        description: `Get Bing Merchant Center feed health for all active stores: published vs rejected product counts per catalog,
+overall reject percentage, and a sampled analysis of likely rejection causes (missing GTIN/brand, short titles, invalid prices, etc.).
+
+Note: Bing Content API does not expose individual rejection reasons — the 'sampledIssues' field is based on
+analysis of 200 sampled products per store to identify common data quality issues that typically cause rejections.`,
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+            },
+        },
+    },
 ];
