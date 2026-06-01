@@ -640,16 +640,30 @@ class BingAdsManager {
         }
         const requestId = await this.submitReport(client, reportRequest);
         const rows = await this.waitForReport(client, requestId);
-        return rows.map(r => ({
-            hour: parseInt(r["TimePeriod"] ?? "0"),
-            campaign_name: r["CampaignName"],
-            campaign_id: r["CampaignId"],
-            spend: parseFloat(r["Spend"] ?? "0"),
-            clicks: parseInt(r["Clicks"] ?? "0"),
-            impressions: parseInt(r["Impressions"] ?? "0"),
-            conversions: parseFloat(r["Conversions"] ?? "0"),
-            avg_cpc: parseFloat(r["AverageCpc"] ?? "0"),
-        }));
+        // Aggregate by hour across all campaigns
+        const byHour = {};
+        for (const r of rows) {
+            const h = parseInt(r["TimePeriod"] ?? "0");
+            const spend = parseFloat(r["Spend"] ?? "0");
+            const clicks = parseInt(r["Clicks"] ?? "0");
+            if (!byHour[h])
+                byHour[h] = { spend: 0, clicks: 0, impressions: 0, conversions: 0, cost_micros: 0 };
+            byHour[h].spend += spend;
+            byHour[h].clicks += clicks;
+            byHour[h].impressions += parseInt(r["Impressions"] ?? "0");
+            byHour[h].conversions += parseFloat(r["Conversions"] ?? "0");
+        }
+        return Array.from({ length: 24 }, (_, h) => {
+            const d = byHour[h] ?? { spend: 0, clicks: 0, impressions: 0, conversions: 0 };
+            return {
+                hour: h,
+                spend: Math.round(d.spend * 100) / 100,
+                clicks: d.clicks,
+                impressions: d.impressions,
+                conversions: Math.round(d.conversions * 100) / 100,
+                avg_cpc: d.clicks > 0 ? Math.round(d.spend / d.clicks * 1000) / 1000 : 0,
+            };
+        });
     }
     // ============================================
     // BUDGET PACING
@@ -661,7 +675,7 @@ class BingAdsManager {
             Type: "BudgetSummaryReportRequest",
             Format: "Csv",
             ReportName: "BudgetPacing",
-            Columns: ["AccountName", "CampaignName", "CampaignId", "CampaignStatus", "DailySpend", "MonthlyBudget", "MonthToDateSpend"],
+            Columns: ["AccountName", "CampaignName", "CampaignId", "DailySpend", "MonthlyBudget", "MonthToDateSpend"],
             Scope: { AccountIds: [parseInt(client.account_id)] },
             Time: {
                 CustomDateRangeStart: { Year: sy, Month: sm, Day: sd },
@@ -671,7 +685,7 @@ class BingAdsManager {
         const requestId = await this.submitReport(client, reportRequest);
         const rows = await this.waitForReport(client, requestId);
         return rows
-            .filter(r => r["CampaignStatus"] === "Active")
+            .filter(r => parseFloat(r["MonthlyBudget"] ?? "0") > 0)
             .map(r => {
             const monthly = parseFloat(r["MonthlyBudget"] ?? "0");
             const spent = parseFloat(r["MonthToDateSpend"] ?? "0");
@@ -709,7 +723,6 @@ class BingAdsManager {
             ReportName: "DisapprovedAds",
             Aggregation: "Summary",
             Columns: ["CampaignName", "AdGroupName", "AdId", "AdType", "Impressions", "Clicks", "Spend"],
-            Filter: { AdStatus: ["Inactive"] },
             Scope: { AccountIds: [parseInt(client.account_id)] },
             Time: { PredefinedTime: "LastMonth" },
         };
