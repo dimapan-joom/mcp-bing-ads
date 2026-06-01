@@ -663,12 +663,23 @@ class BingAdsManager {
             : `<MaxCpc i:nil="true"/>`;
         switch (strategy.type) {
             case "TargetRoas":
-                schemeXml = `<BiddingScheme i:type="TargetRoasBiddingScheme">${maxCpcXml}<TargetRoas>${strategy.targetRoas}</TargetRoas></BiddingScheme>`;
+                // Maximize conversion value with a target ROAS (same as MaxConversionValue + ROAS)
+                schemeXml = `<BiddingScheme i:type="MaxConversionValueBiddingScheme">${maxCpcXml}<TargetRoas>${strategy.targetRoas}</TargetRoas></BiddingScheme>`;
+                break;
+            case "MaxConversionValue":
+                // Maximize conversion value — with optional ROAS target (most common for Shopping/PMax)
+                if (strategy.targetRoas) {
+                    schemeXml = `<BiddingScheme i:type="MaxConversionValueBiddingScheme">${maxCpcXml}<TargetRoas>${strategy.targetRoas}</TargetRoas></BiddingScheme>`;
+                }
+                else {
+                    schemeXml = `<BiddingScheme i:type="MaxConversionValueBiddingScheme">${maxCpcXml}<TargetRoas i:nil="true"/></BiddingScheme>`;
+                }
                 break;
             case "TargetCpa":
                 schemeXml = `<BiddingScheme i:type="TargetCpaBiddingScheme">${maxCpcXml}<TargetCpa>${strategy.targetCpa}</TargetCpa></BiddingScheme>`;
                 break;
             case "MaxConversions":
+                // Maximize conversion COUNT (not value) — no ROAS target
                 schemeXml = `<BiddingScheme i:type="MaxConversionsBiddingScheme">${maxCpcXml}</BiddingScheme>`;
                 break;
             case "MaxClicks":

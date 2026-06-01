@@ -172,8 +172,8 @@ export const tools: Tool[] = [
         campaign_id: { type: "string", description: "Numeric campaign ID" },
         strategy_type: {
           type: "string",
-          enum: ["TargetRoas", "TargetCpa", "MaxConversions", "MaxClicks", "ManualCpc"],
-          description: "Bidding strategy type",
+          enum: ["TargetRoas", "MaxConversionValue", "TargetCpa", "MaxConversions", "MaxClicks", "ManualCpc"],
+          description: "Bidding strategy type. MaxConversionValue = maximize conversion value (Shopping/PMax default, supports optional ROAS target). TargetRoas = alias for MaxConversionValue+ROAS. MaxConversions = maximize conversion count (no value optimization).",
         },
         target_roas: { type: "number", description: "Target ROAS (e.g. 0.85 = 85%). Required for TargetRoas." },
         target_cpa: { type: "number", description: "Target CPA in account currency (e.g. 5.00). Required for TargetCpa." },
