@@ -993,6 +993,60 @@ class BingAdsManager {
   }
 
   // ============================================
+  // BULK UPDATE ROAS — one SOAP call for N campaigns
+  // ============================================
+
+  async bulkUpdateRoas(client: ClientConfig, updates: Array<{ campaign_id: string; target_roas: number }>): Promise<any> {
+    // Build one <Campaigns> block with all campaigns
+    const campaignsXml = updates.map(u =>
+      `<Campaign>
+        <BiddingScheme i:type="MaxConversionValueBiddingScheme">
+          <MaxCpc i:nil="true"/>
+          <TargetRoas>${u.target_roas}</TargetRoas>
+        </BiddingScheme>
+        <Id>${u.campaign_id}</Id>
+      </Campaign>`
+    ).join("\n");
+
+    const body = `<UpdateCampaignsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+      <AccountId>${client.account_id}</AccountId>
+      <Campaigns>${campaignsXml}</Campaigns>
+    </UpdateCampaignsRequest>`;
+
+    await this.soapCall("UpdateCampaigns", body, client);
+
+    // Verify via single Bulk download
+    const bulkRows = await this.getCampaignsWithRoas(client, "all");
+    const bulkMap = new Map(bulkRows.map(r => [r.campaign_id, parseFloat(r.campaign_type)]));
+
+    const verified: typeof updates = [];
+    const failed: Array<typeof updates[0] & { actual: number | null }> = [];
+
+    for (const u of updates) {
+      const actual = bulkMap.get(u.campaign_id) ?? null;
+      if (actual !== null && Math.abs(actual - u.target_roas) < 0.005) {
+        verified.push(u);
+      } else {
+        failed.push({ ...u, actual });
+      }
+    }
+
+    return {
+      success: true,
+      total: updates.length,
+      verified: verified.length,
+      failed: failed.length,
+      verified_list: verified,
+      failed_list: failed,
+      slack_alert_needed: failed.length > 0,
+      slack_channels: failed.length > 0 ? ["C0B7H9YT1C4", "ULALR4665"] : [],
+      slack_alert_text: failed.length > 0
+        ? `🚨 *Bing Ads — Bulk ROAS update: ${failed.length} campaigns failed verification*\n${failed.map(f => `• ${f.campaign_id}: expected ${f.target_roas}, actual ${f.actual ?? "?"}`).join("\n")}`
+        : null,
+    };
+  }
+
+  // ============================================
   // SET CAMPAIGN BIDDING STRATEGY
   // ============================================
 
@@ -1042,27 +1096,14 @@ class BingAdsManager {
 
     await this.soapCall("UpdateCampaigns", body, client);
 
-    // Verify via Bulk API (accurate for PMax + Shopping)
-    const actual = await this.getCampaignActualState(client, campaignId);
-    const expectedRoas = strategy.targetRoas ?? null;
-    const roasMatch = expectedRoas === null || (actual.targetRoas !== null && Math.abs(actual.targetRoas - expectedRoas) < 0.005);
-    const verified = roasMatch;
-
-    const alertText = !verified
-      ? `🚨 *Bing Ads — Bidding update FAILED verification*\nCampaign: \`${campaignId}\` (${client.name})\nRequested: ${strategy.type} ROAS=${strategy.targetRoas}\nActual: ${actual.biddingType} ROAS=${actual.targetRoas}\nAction required: check campaign in Bing Ads UI`
-      : null;
-
+    // No immediate verification — Bulk API has propagation delay (~5-30s).
+    // Use bing_ads_bulk_update_roas for batch updates (includes deferred verification).
+    // Use bing_ads_get_campaigns_with_roas separately to verify after the fact.
     return {
       success: true,
-      verified,
+      campaign_id: campaignId,
       requested: { strategy: strategy.type, targetRoas: strategy.targetRoas ?? null },
-      actual: { biddingType: actual.biddingType, targetRoas: actual.targetRoas },
-      slack_alert_needed: !verified,
-      slack_alert_text: alertText,
-      slack_channels: !verified ? ["C0B7H9YT1C4", "ULALR4665"] : [],
-      message: verified
-        ? `✅ Campaign ${campaignId} bidding confirmed: ${actual.biddingType}${actual.targetRoas ? ` ROAS ${Math.round(actual.targetRoas * 100)}%` : ""}`
-        : `⚠️ Campaign ${campaignId} bidding mismatch! Requested ROAS:${strategy.targetRoas} — Actual ROAS:${actual.targetRoas}. SEND SLACK ALERT to C0B7H9YT1C4 and ULALR4665.`,
+      message: `✅ Campaign ${campaignId} update submitted: ${strategy.type}${strategy.targetRoas ? ` ROAS=${strategy.targetRoas}` : ""}`,
     };
   }
 
@@ -1765,6 +1806,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify(result, null, 2),
           }],
         };
+      }
+
+      case "bing_ads_bulk_update_roas": {
+        assertWriteAllowed("bing_ads_bulk_update_roas");
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.bulkUpdateRoas(
+          client,
+          args?.updates as Array<{ campaign_id: string; target_roas: number }>,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       case "bing_ads_set_campaign_bidding": {

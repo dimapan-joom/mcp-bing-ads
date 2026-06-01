@@ -15,6 +15,34 @@ export const tools = [
         },
     },
     {
+        name: "bing_ads_get_campaigns_with_roas",
+        description: `Get all active campaigns with their actual Target ROAS via Bulk Download API.
+
+⚠️ WHY THIS EXISTS: bing_ads_list_campaigns returns BiddingScheme=null for ALL PMax campaigns
+because the Bing Ads SOAP/REST API does not expose ROAS at the campaign level for PMax.
+The ROAS is stored in the Bid Strategy and is ONLY accessible via the Bulk Download CSV
+(column "Bid Strategy TargetRoas"). This has been confirmed experimentally — the Bing UI
+shows ROAS values (e.g. 86%) while SOAP returns nil for the same campaigns.
+
+Use this tool when you need to:
+- Read current ROAS for any campaign type (PMax, Shopping, Search)
+- Compare current vs target ROAS before updating
+- Verify ROAS was correctly applied after bing_ads_set_campaign_bidding
+
+Note: slower than bing_ads_list_campaigns (~15-30s) due to async Bulk download.`,
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+                status_filter: {
+                    type: "string",
+                    description: "Filter by status: 'active' (default), 'paused', 'all'",
+                },
+            },
+        },
+    },
+    {
         name: "bing_ads_list_campaigns",
         description: "List campaigns for the Bing/Microsoft Advertising account. By default returns only Active campaigns. Pass status_filter='all' to include Paused/Deleted.",
         inputSchema: {
@@ -159,9 +187,47 @@ export const tools = [
         },
     },
     {
+        name: "bing_ads_bulk_update_roas",
+        description: `Update Target ROAS for multiple campaigns in a SINGLE Bing Ads API call.
+
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
+
+Sends all campaign updates in one SOAP UpdateCampaigns request (no per-campaign round trips),
+then verifies via a single Bulk download. Use this instead of calling bing_ads_set_campaign_bidding
+in a loop — it's dramatically faster for bulk ROAS syncs (e.g. 60 campaigns = 1 call vs 60).
+
+Returns per-campaign verified/failed breakdown.`,
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string", description: "The account ID" },
+                updates: {
+                    type: "array",
+                    description: "List of campaigns to update",
+                    items: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                            campaign_id: { type: "string", description: "Numeric campaign ID" },
+                            target_roas: { type: "number", description: "Target ROAS (e.g. 0.87 = 87%)" },
+                        },
+                        required: ["campaign_id", "target_roas"],
+                    },
+                    minItems: 1,
+                },
+            },
+            required: ["updates"],
+        },
+    },
+    {
         name: "bing_ads_set_campaign_bidding",
-        description: `Change bidding strategy for a campaign. Supports Target ROAS, Target CPA, Maximize Conversions, Maximize Clicks, Manual CPC.
-⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
+        description: `Change bidding strategy for a single campaign. Supports Target ROAS, Target CPA, Maximize Conversions, Maximize Clicks, Manual CPC.
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
+
+For bulk ROAS updates (multiple campaigns), use bing_ads_bulk_update_roas instead — it's a single API call.
+
+Note: does NOT verify after writing (Bulk API has propagation delay). Use bing_ads_get_campaigns_with_roas separately to verify.`,
         inputSchema: {
             additionalProperties: false,
             type: "object",
@@ -170,8 +236,8 @@ export const tools = [
                 campaign_id: { type: "string", description: "Numeric campaign ID" },
                 strategy_type: {
                     type: "string",
-                    enum: ["TargetRoas", "TargetCpa", "MaxConversions", "MaxClicks", "ManualCpc"],
-                    description: "Bidding strategy type",
+                    enum: ["TargetRoas", "MaxConversionValue", "TargetCpa", "MaxConversions", "MaxClicks", "ManualCpc"],
+                    description: "Bidding strategy type. MaxConversionValue = maximize conversion value (Shopping/PMax default, supports optional ROAS target). TargetRoas = alias for MaxConversionValue+ROAS. MaxConversions = maximize conversion count (no value optimization).",
                 },
                 target_roas: { type: "number", description: "Target ROAS (e.g. 0.85 = 85%). Required for TargetRoas." },
                 target_cpa: { type: "number", description: "Target CPA in account currency (e.g. 5.00). Required for TargetCpa." },
@@ -182,7 +248,7 @@ export const tools = [
     },
     {
         name: "bing_ads_set_campaign_status",
-        description: "Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.",
+        description: `Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
         inputSchema: {
             additionalProperties: false,
             type: "object",

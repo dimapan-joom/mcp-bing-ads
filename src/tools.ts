@@ -189,13 +189,47 @@ Note: slower than bing_ads_list_campaigns (~15-30s) due to async Bulk download.`
     },
   },
   {
-    name: "bing_ads_set_campaign_bidding",
-    description: `Change bidding strategy for a campaign. Supports Target ROAS, Target CPA, Maximize Conversions, Maximize Clicks, Manual CPC.
+    name: "bing_ads_bulk_update_roas",
+    description: `Update Target ROAS for multiple campaigns in a SINGLE Bing Ads API call.
+
 ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
 
-After calling this tool, check the result:
-- If verified=true: log the change via sheets-log tool.
-- If verified=false (slack_alert_needed=true): IMMEDIATELY send slack_alert_text to ALL channels in slack_channels (C0B7H9YT1C4 = #marketing-ai-debug, ULALR4665 = @dimapan) using the Slack MCP tool, then log the failure.`,
+Sends all campaign updates in one SOAP UpdateCampaigns request (no per-campaign round trips),
+then verifies via a single Bulk download. Use this instead of calling bing_ads_set_campaign_bidding
+in a loop — it's dramatically faster for bulk ROAS syncs (e.g. 60 campaigns = 1 call vs 60).
+
+Returns per-campaign verified/failed breakdown.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID" },
+        updates: {
+          type: "array",
+          description: "List of campaigns to update",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              campaign_id: { type: "string", description: "Numeric campaign ID" },
+              target_roas: { type: "number", description: "Target ROAS (e.g. 0.87 = 87%)" },
+            },
+            required: ["campaign_id", "target_roas"],
+          },
+          minItems: 1,
+        },
+      },
+      required: ["updates"],
+    },
+  },
+  {
+    name: "bing_ads_set_campaign_bidding",
+    description: `Change bidding strategy for a single campaign. Supports Target ROAS, Target CPA, Maximize Conversions, Maximize Clicks, Manual CPC.
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
+
+For bulk ROAS updates (multiple campaigns), use bing_ads_bulk_update_roas instead — it's a single API call.
+
+Note: does NOT verify after writing (Bulk API has propagation delay). Use bing_ads_get_campaigns_with_roas separately to verify.`,
     inputSchema: {
       additionalProperties: false,
       type: "object",
@@ -216,11 +250,7 @@ After calling this tool, check the result:
   },
   {
     name: "bing_ads_set_campaign_status",
-    description: `Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
-
-After calling this tool, check the result:
-- If verified=true: log the change via sheets-log tool.
-- If verified=false (slack_alert_needed=true): IMMEDIATELY send slack_alert_text to ALL channels in slack_channels (C0B7H9YT1C4 = #marketing-ai-debug, ULALR4665 = @dimapan) using the Slack MCP tool, then log the failure.`,
+    description: `Enable or pause a campaign. ⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.`,
     inputSchema: {
       additionalProperties: false,
       type: "object",
