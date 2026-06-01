@@ -18,7 +18,7 @@ export const tools: Tool[] = [
   },
   {
     name: "bing_ads_list_campaigns",
-    description: "List all campaigns for the current client's Bing/Microsoft Advertising account, including campaign name, status, budget, and type.",
+    description: "List campaigns for the Bing/Microsoft Advertising account. By default returns only Active campaigns. Pass status_filter='all' to include Paused/Deleted.",
     inputSchema: {
       additionalProperties: false,
       type: "object",
@@ -27,12 +27,16 @@ export const tools: Tool[] = [
           type: "string",
           description: "The account ID (uses context if not provided)",
         },
+        status_filter: {
+          type: "string",
+          description: "Filter by campaign status. Options: 'active' (default), 'paused', 'all'",
+        },
       },
     },
   },
   {
     name: "bing_ads_get_campaign_performance",
-    description: "Get campaign performance metrics (impressions, clicks, CTR, CPC, spend, conversions, revenue) for a date range.",
+    description: "Get campaign performance metrics (impressions, clicks, CTR, CPC, spend, conversions, revenue) for a date range. By default returns only Active campaigns. Pass status_filter='all' to include Paused.",
     inputSchema: {
       additionalProperties: false,
       type: "object",
@@ -40,6 +44,10 @@ export const tools: Tool[] = [
         account_id: { type: "string" },
         start_date: { type: "string", description: "Start date YYYY-MM-DD" },
         end_date: { type: "string", description: "End date YYYY-MM-DD" },
+        status_filter: {
+          type: "string",
+          description: "Filter by campaign status. Options: 'active' (default), 'paused', 'all'",
+        },
       },
       required: ["start_date", "end_date"],
     },

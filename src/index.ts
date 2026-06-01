@@ -780,10 +780,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "bing_ads_list_campaigns": {
         const client = resolveClient(args?.account_id as string);
         const result = await adsManager.listCampaigns(client);
+        // Filter to only active campaigns by default; pass status_filter="all" to see all
+        const statusFilter = (args?.status_filter as string || "active").toLowerCase();
+        const filtered = statusFilter === "all"
+          ? result
+          : { ...result, Campaigns: (result?.Campaigns ?? []).filter((c: any) => c.Status?.toLowerCase() === statusFilter) };
         return {
           content: [{
             type: "text",
-            text: JSON.stringify(safeResponse(result, "listCampaigns"), null, 2),
+            text: JSON.stringify(safeResponse(filtered, "listCampaigns"), null, 2),
           }],
         };
       }
@@ -799,10 +804,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           startDate: args?.start_date as string,
           endDate: args?.end_date as string,
         });
+        // Filter to only active campaigns by default; pass status_filter="all" to include paused
+        const cpStatusFilter = (args?.status_filter as string || "active").toLowerCase();
+        const filteredResult = cpStatusFilter === "all"
+          ? result
+          : (result as any[]).filter((r: any) => r.CampaignStatus?.toLowerCase() === cpStatusFilter);
         return {
           content: [{
             type: "text",
-            text: JSON.stringify(safeResponse(result, "getCampaignPerformance"), null, 2),
+            text: JSON.stringify(safeResponse(filteredResult, "getCampaignPerformance"), null, 2),
           }],
         };
       }
