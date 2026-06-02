@@ -993,6 +993,54 @@ class BingAdsManager {
   }
 
   // ============================================
+  // BULK UPDATE BUDGETS — one SOAP call for N campaigns
+  // ============================================
+
+  async bulkUpdateBudgets(client: ClientConfig, updates: Array<{ campaign_id: string; daily_budget: number }>): Promise<any> {
+    const campaignsXml = updates.map(u =>
+      `<Campaign>
+        <DailyBudget>${u.daily_budget}</DailyBudget>
+        <BudgetType>DailyBudgetStandard</BudgetType>
+        <Id>${u.campaign_id}</Id>
+      </Campaign>`
+    ).join("\n");
+
+    const body = `<UpdateCampaignsRequest xmlns="https://bingads.microsoft.com/CampaignManagement/v13">
+      <AccountId>${client.account_id}</AccountId>
+      <Campaigns>${campaignsXml}</Campaigns>
+    </UpdateCampaignsRequest>`;
+
+    await this.soapCall("UpdateCampaigns", body, client);
+
+    // Verify via list campaigns (budgets are available in SOAP, no Bulk needed)
+    const listResult = await this.listCampaigns(client);
+    const campaignMap = new Map<string, number>(
+      (listResult?.Campaigns ?? []).map((c: any) => [String(c.Id), parseFloat(c.DailyBudget ?? "0")] as [string, number])
+    );
+
+    const verified: Array<{ campaign_id: string; daily_budget: number }> = [];
+    const failed: Array<{ campaign_id: string; daily_budget: number; actual: number | null }> = [];
+
+    for (const u of updates) {
+      const actual = campaignMap.get(u.campaign_id) ?? null;
+      if (actual !== null && Math.abs(actual - u.daily_budget) < 0.01) {
+        verified.push(u);
+      } else {
+        failed.push({ ...u, actual });
+      }
+    }
+
+    return {
+      success: true,
+      total: updates.length,
+      verified: verified.length,
+      failed: failed.length,
+      verified_list: verified,
+      failed_list: failed,
+    };
+  }
+
+  // ============================================
   // BULK UPDATE ROAS — one SOAP call for N campaigns
   // ============================================
 
@@ -1806,6 +1854,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify(result, null, 2),
           }],
         };
+      }
+
+      case "bing_ads_bulk_update_budgets": {
+        assertWriteAllowed("bing_ads_bulk_update_budgets");
+        const client = resolveClient(args?.account_id as string);
+        const result = await adsManager.bulkUpdateBudgets(
+          client,
+          args?.updates as Array<{ campaign_id: string; daily_budget: number }>,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
 
       case "bing_ads_bulk_update_roas": {
