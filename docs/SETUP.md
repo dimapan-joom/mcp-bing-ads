@@ -20,7 +20,7 @@ The Developer Token is tied to your Microsoft Advertising manager account.
 1. Log in to [Microsoft Advertising](https://ads.microsoft.com)
 2. Go to **Tools → API Center** (top navigation)
 3. Under **Developer token**, click **Request token** if you don't have one yet
-4. Copy the token — it looks like `1070HH35YC513554`
+4. Copy the token — a short alphanumeric string. Do not paste it into this repository, or any file you commit: it belongs in an environment variable or a secret store. A developer token grants no account access on its own, but it is still ours, and a leaked one gets our API access throttled or revoked.
 
 > 📸 _Screenshot: Tools → API Center page showing the developer token_
 
