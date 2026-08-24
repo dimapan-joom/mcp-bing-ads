@@ -187,6 +187,37 @@ Note: slower than bing_ads_list_campaigns (~15-30s) due to async Bulk download.`
         },
     },
     {
+        name: "bing_ads_bulk_update_budgets",
+        description: `Update daily budgets for multiple campaigns in a SINGLE Bing Ads API call.
+
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
+
+Sends all budget updates in one SOAP UpdateCampaigns request.
+Returns per-campaign verified/failed breakdown.`,
+        inputSchema: {
+            additionalProperties: false,
+            type: "object",
+            properties: {
+                account_id: { type: "string", description: "The account ID" },
+                updates: {
+                    type: "array",
+                    description: "List of campaigns to update",
+                    items: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                            campaign_id: { type: "string", description: "Numeric campaign ID" },
+                            daily_budget: { type: "number", description: "New daily budget in account currency" },
+                        },
+                        required: ["campaign_id", "daily_budget"],
+                    },
+                    minItems: 1,
+                },
+            },
+            required: ["updates"],
+        },
+    },
+    {
         name: "bing_ads_bulk_update_roas",
         description: `Update Target ROAS for multiple campaigns in a SINGLE Bing Ads API call.
 
