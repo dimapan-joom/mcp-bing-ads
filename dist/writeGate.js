@@ -13,6 +13,10 @@ export const WRITE_TOOLS = new Set([
     "bing_ads_set_campaign_status",
     "bing_ads_add_responsive_search_ad",
     "bing_ads_create_experiment",
+    // Added later than the rest and missed at the time: both change live
+    // budgets and bids, so read-only mode must hide them.
+    "bing_ads_bulk_update_budgets",
+    "bing_ads_bulk_update_roas",
 ]);
 export function isWriteTool(name) {
     return WRITE_TOOLS.has(name);
