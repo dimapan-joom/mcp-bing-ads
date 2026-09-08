@@ -3,6 +3,7 @@ import { tools } from "./tools.js";
 
 const EXPECTED_TOOL_NAMES = [
   "bing_ads_get_client_context",
+  "bing_ads_get_campaigns_with_roas",
   "bing_ads_list_campaigns",
   "bing_ads_get_campaign_performance",
   "bing_ads_list_ad_groups",
@@ -12,6 +13,18 @@ const EXPECTED_TOOL_NAMES = [
   "bing_ads_list_shared_entities",
   "bing_ads_add_shared_negatives",
   "bing_ads_update_campaign_budget",
+  "bing_ads_bulk_update_budgets",
+  "bing_ads_bulk_update_roas",
+  "bing_ads_set_campaign_bidding",
+  "bing_ads_set_campaign_status",
+  "bing_ads_add_responsive_search_ad",
+  "bing_ads_get_spend_by_hour",
+  "bing_ads_get_budget_pacing",
+  "bing_ads_get_disapproved_ads",
+  "bing_ads_get_recommendations",
+  "bing_ads_get_experiments",
+  "bing_ads_create_experiment",
+  "bing_ads_get_merchant_center_health",
 ];
 
 describe("Bing Ads MCP tools contract", () => {

@@ -601,7 +601,14 @@ class BingAdsManager {
     while (Date.now() - start < maxWaitMs) {
       const result = await this.pollReport(client, requestId);
 
-      if (result.status === "Success" && result.url) {
+      if (result.status === "Success") {
+        // Bing reports a zero-row result as Success with no download URL. Left
+        // to fall through, that polls until the timeout and then fails, which
+        // reads as an outage rather than as "nothing matched" — and a digest
+        // querying many accounts hits it routinely.
+        if (!result.url) {
+          return [];
+        }
         return await this.downloadAndParseCsv(result.url);
       }
       if (result.status === "Error") {

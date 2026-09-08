@@ -10,13 +10,20 @@ import {
 } from "./writeGate.js";
 
 const READ_TOOLS = [
-  "bing_ads_get_client_context",
-  "bing_ads_list_campaigns",
+  "bing_ads_get_budget_pacing",
   "bing_ads_get_campaign_performance",
-  "bing_ads_list_ad_groups",
+  "bing_ads_get_campaigns_with_roas",
+  "bing_ads_get_client_context",
+  "bing_ads_get_disapproved_ads",
+  "bing_ads_get_experiments",
+  "bing_ads_get_merchant_center_health",
+  "bing_ads_get_recommendations",
+  "bing_ads_get_spend_by_hour",
   "bing_ads_keyword_performance",
-  "bing_ads_search_term_report",
+  "bing_ads_list_ad_groups",
+  "bing_ads_list_campaigns",
   "bing_ads_list_shared_entities",
+  "bing_ads_search_term_report",
 ];
 
 describe("writeGate", () => {
