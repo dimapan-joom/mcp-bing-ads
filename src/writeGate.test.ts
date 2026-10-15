@@ -24,6 +24,11 @@ const READ_TOOLS = [
   "bing_ads_list_campaigns",
   "bing_ads_list_shared_entities",
   "bing_ads_search_term_report",
+  "bing_ads_list_conversion_goals",
+  "bing_ads_get_campaign_conversion_goals",
+  "bing_ads_get_conversion_goal_performance",
+  "bing_ads_get_offline_conversion_health",
+  "bing_ads_get_campaign_settings",
 ];
 
 describe("writeGate", () => {

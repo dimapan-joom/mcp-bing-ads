@@ -418,4 +418,195 @@ analysis of 200 sampled products per store to identify common data quality issue
       },
     },
   },
+  {
+    name: "bing_ads_list_conversion_goals",
+    description: `List conversion goals with their settings, campaign usage and recent results.
+
+Per goal: ID, name, type/category, status, tracking status, include_in_conversions (= !ExcludeFromBidding),
+whether it is in the account-default bidding set, conversion window, attribution model, count type, revenue
+settings, scope, how many campaigns use it (campaign-specific vs via account default), and — over lookback_days —
+conversions, revenue, all_conversions, all_revenue and the last click date that converted.
+
+Start here for any conversion audit; follow with bing_ads_get_campaign_conversion_goals.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        goal_ids: { type: "array", items: { type: "string" }, description: "Optional: only these goal IDs" },
+        status_filter: { type: "string", enum: ["all", "active", "paused", "deleted"], description: "Goal status filter (default: all)" },
+        include_metrics: { type: "boolean", description: "Add conversions/revenue per goal from a report (default: true, adds ~10-30s)" },
+        lookback_days: { type: "number", description: "Metrics window ending today (default: 30)" },
+      },
+    },
+  },
+  {
+    name: "bing_ads_get_campaign_conversion_goals",
+    description: `Show which conversion goals each campaign bids on, for a list of campaigns or the whole account in one call.
+
+Per campaign: selection_mode ('account_default' or 'campaign_specific'), selected goal IDs/names, the effective
+bidding goals with their tracking status, and warnings (paused/missing selected goals, goals without recent
+conversions, campaigns with no active bidding goal). Also returns the account-default goal set and a summary
+grouping campaigns by effective goal set — the API-side replacement for checking goals in the Bing UI.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        campaign_ids: { type: "array", items: { type: "string" }, description: "Optional: only these campaigns (status_filter is then ignored)" },
+        status_filter: { type: "string", enum: ["active", "paused", "all"], description: "Which campaigns when campaign_ids is omitted (default: active, incl. budget-paused)" },
+      },
+    },
+  },
+  {
+    name: "bing_ads_get_conversion_goal_performance",
+    description: `Conversions and revenue split by campaign × conversion goal for a period, with campaign spend, ROAS and CPA.
+
+Shows which goal produced the conversions/revenue that bing_ads_get_campaign_performance reports as one number.
+Covers Search, Shopping and Performance Max. conversions/revenue = where the goal drives that campaign's bidding;
+all_conversions/all_revenue = every attributed conversion of the goal. Bing attributes conversions to the click date.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        start_date: { type: "string", description: "Start date YYYY-MM-DD" },
+        end_date: { type: "string", description: "End date YYYY-MM-DD" },
+        campaign_ids: { type: "array", items: { type: "string" }, description: "Optional: only these campaigns" },
+        goal_ids: { type: "array", items: { type: "string" }, description: "Optional: only these goals" },
+        time_aggregation: { type: "string", enum: ["summary", "daily"], description: "summary (default) or one row per click day" },
+        group_by: { type: "string", enum: ["campaign_goal", "goal"], description: "campaign_goal (default) returns rows plus goal totals; goal returns only goal totals" },
+        limit: { type: "number", description: "Max campaign×goal rows (default: 500, sorted by all_revenue)" },
+      },
+      required: ["start_date", "end_date"],
+    },
+  },
+  {
+    name: "bing_ads_get_offline_conversion_health",
+    description: `Upload health of offline conversion goals over the last N days (by upload date).
+
+Per goal: last upload and last successful upload date, upload latency in days, accepted counts for the last
+1/7/30 days, rejected (unattributed) count, acceptance rate, duplicate count, rejection reasons with shares,
+daily upload breakdown, and signals such as no_recent_conversions, no_uploads_in_period, stale_uploads,
+low_acceptance_rate, mostly_duplicates. Explains a goal that exists but records nothing.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        goal_ids: { type: "array", items: { type: "string" }, description: "Optional: only these goals (default: every non-deleted offline goal)" },
+        lookback_days: { type: "number", description: "Days back from today, 1-90 (default: 30). Bing allows 7 days per call, so 30 days = 5 calls." },
+      },
+    },
+  },
+  {
+    name: "bing_ads_get_campaign_settings",
+    description: `One-call campaign settings: budget, bidding strategy and target ROAS/CPA (including PMax), campaign
+type/status, conversion-goal selection mode, selected and effective bidding goals, and warnings.
+For goal selection alone, bing_ads_get_campaign_conversion_goals adds an account summary.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        campaign_ids: { type: "array", items: { type: "string" }, description: "Optional: only these campaigns (status_filter is then ignored)" },
+        status_filter: { type: "string", enum: ["active", "paused", "all"], description: "Which campaigns when campaign_ids is omitted (default: active)" },
+      },
+    },
+  },
+  {
+    name: "bing_ads_set_campaign_conversion_goals",
+    description: `Assign conversion goals to campaigns: back to the account default set, or a specific list of goals.
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true. Changes what bidding optimises for.
+
+dry_run defaults to TRUE: the call returns the old/new diff and changes nothing. Pass dry_run=false only after
+the user confirms the diff. Applies all campaigns in batch (adds new goals before removing old ones), then reads
+every campaign back and returns verified/failed per campaign with partial errors.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        changes: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              campaign_id: { type: "string", description: "Numeric campaign ID" },
+              mode: { type: "string", enum: ["account_default", "campaign_specific"], description: "account_default removes all campaign-level goals" },
+              goal_ids: { type: "array", items: { type: "string" }, description: "Required for campaign_specific: the full new goal list (must be Active goals)" },
+            },
+            required: ["campaign_id", "mode"],
+          },
+        },
+        dry_run: { type: "boolean", description: "Default true. false applies the change." },
+      },
+      required: ["changes"],
+    },
+  },
+  {
+    name: "bing_ads_update_conversion_goal",
+    description: `Change settings of one or more conversion goals: include_in_conversions (primary/secondary), status,
+conversion window, name, count type, revenue type/value/currency.
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true. include_in_conversions changes the account-default bidding set.
+
+dry_run defaults to TRUE and returns the old/new diff. With dry_run=false it applies in one batch, reads the goals
+back and returns verified/failed per goal with partial errors. Only the fields you pass are sent.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        updates: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              goal_id: { type: "string", description: "Conversion goal ID" },
+              name: { type: "string" },
+              status: { type: "string", enum: ["Active", "Paused"] },
+              include_in_conversions: { type: "boolean", description: "true = primary (counts in Conversions, used for bidding); false = secondary" },
+              conversion_window_days: { type: "number", description: "1-90 days" },
+              count_type: { type: "string", enum: ["All", "Unique"] },
+              revenue_type: { type: "string", enum: ["FixedValue", "VariableValue", "NoValue"] },
+              revenue_value: { type: "number", description: "Fixed value, or the default for VariableValue" },
+              currency_code: { type: "string", description: "e.g. USD" },
+            },
+            required: ["goal_id"],
+          },
+        },
+        dry_run: { type: "boolean", description: "Default true. false applies the change." },
+      },
+      required: ["updates"],
+    },
+  },
+  {
+    name: "bing_ads_create_offline_conversion_goal",
+    description: `Create an offline conversion goal (account scope).
+⚠️ Write operation — requires BING_ADS_MCP_WRITE=true.
+
+Created as secondary (include_in_conversions=false) unless asked otherwise, so it cannot change bidding until
+included on purpose. dry_run defaults to TRUE and returns the goal that would be created.`,
+    inputSchema: {
+      additionalProperties: false,
+      type: "object",
+      properties: {
+        account_id: { type: "string", description: "The account ID (uses context if not provided)" },
+        name: { type: "string", description: "Goal name — must match the conversion name used in uploads" },
+        conversion_window_days: { type: "number", description: "1-90 (default 30)" },
+        count_type: { type: "string", enum: ["All", "Unique"], description: "Default All" },
+        include_in_conversions: { type: "boolean", description: "Default false (secondary)" },
+        goal_category: { type: "string", description: "Default Purchase" },
+        revenue_type: { type: "string", enum: ["FixedValue", "VariableValue", "NoValue"], description: "Default VariableValue" },
+        revenue_value: { type: "number", description: "Fixed value, or the default for VariableValue (default 0.01)" },
+        currency_code: { type: "string", description: "Default USD" },
+        dry_run: { type: "boolean", description: "Default true. false creates the goal." },
+      },
+      required: ["name"],
+    },
+  },
 ];

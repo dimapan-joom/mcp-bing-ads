@@ -162,6 +162,21 @@ bing_ads_add_shared_negatives({
 - Keyword performance (QS, expected CTR, ad relevance, landing page experience)
 - Search term insights (which queries are converting)
 
+### Conversion Goals
+Read-only (audit a conversion setup without opening the Bing UI):
+- `bing_ads_list_conversion_goals` -- goals with settings, include-in-conversions, account-default set, campaign usage, conversions/revenue and last converting day
+- `bing_ads_get_campaign_conversion_goals([campaign_ids])` -- per campaign: `account_default` or `campaign_specific`, selected and effective bidding goals, warnings; whole account in one call
+- `bing_ads_get_conversion_goal_performance(start, end)` -- conversions/revenue per campaign × goal with spend, ROAS, CPA (Search, Shopping, PMax)
+- `bing_ads_get_offline_conversion_health([goal_ids])` -- uploads per offline goal: last upload, latency, accepted/rejected, duplicates, rejection reasons, signals
+- `bing_ads_get_campaign_settings([campaign_ids])` -- budget, bidding strategy and target ROAS, goal selection in one call
+
+Write (hidden unless `BING_ADS_MCP_WRITE=true`; `dry_run` defaults to true and returns the old/new diff; applying reads the result back):
+- `bing_ads_set_campaign_conversion_goals(changes)` -- switch campaigns to the account default or a specific goal list, in batch
+- `bing_ads_update_conversion_goal(updates)` -- include in conversions, status, window, name, count, revenue
+- `bing_ads_create_offline_conversion_goal(name)` -- new offline goal, secondary by default
+
+API facts these tools rely on (checked against the live API): a campaign with `GoalIds = null` bids on the account default set (Active goals with `ExcludeFromBidding = false`); a campaign-specific selection overrides `ExcludeFromBidding`; only `CampaignPerformanceReport` with the `Goal` column splits conversions by goal for PMax and Shopping; the offline conversion report allows at most 7 days per call; `InStoreTransaction` goals cannot be queried without the pilot.
+
 ## Key Metrics & Definitions
 
 **Quality Score (QS):** 1-10 rating of keyword quality

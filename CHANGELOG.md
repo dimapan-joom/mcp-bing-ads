@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Conversion-goal tools: `bing_ads_list_conversion_goals`, `bing_ads_get_campaign_conversion_goals`, `bing_ads_get_conversion_goal_performance`, `bing_ads_get_offline_conversion_health`, `bing_ads_get_campaign_settings` (read-only).
+- Write tools with `dry_run` on by default, old/new diff, batch apply, read-back verification and per-item partial errors: `bing_ads_set_campaign_conversion_goals`, `bing_ads_update_conversion_goal`, `bing_ads_create_offline_conversion_goal`.
+
+### Fixed
+- `bing_ads_bulk_update_roas` verified against the campaign type column instead of the target ROAS, so every update was reported as failed.
+
 ## [1.1.0] - 2026-04-18
 
 ### Added

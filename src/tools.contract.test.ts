@@ -25,6 +25,14 @@ const EXPECTED_TOOL_NAMES = [
   "bing_ads_get_experiments",
   "bing_ads_create_experiment",
   "bing_ads_get_merchant_center_health",
+  "bing_ads_list_conversion_goals",
+  "bing_ads_get_campaign_conversion_goals",
+  "bing_ads_get_conversion_goal_performance",
+  "bing_ads_get_offline_conversion_health",
+  "bing_ads_get_campaign_settings",
+  "bing_ads_set_campaign_conversion_goals",
+  "bing_ads_update_conversion_goal",
+  "bing_ads_create_offline_conversion_goal",
 ];
 
 describe("Bing Ads MCP tools contract", () => {

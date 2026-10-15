@@ -17,6 +17,11 @@ export const WRITE_TOOLS = new Set([
     // budgets and bids, so read-only mode must hide them.
     "bing_ads_bulk_update_budgets",
     "bing_ads_bulk_update_roas",
+    // Conversion goals: hidden even for dry runs, so a read-only caller never
+    // sees a tool that can change what bidding optimises for.
+    "bing_ads_set_campaign_conversion_goals",
+    "bing_ads_update_conversion_goal",
+    "bing_ads_create_offline_conversion_goal",
 ]);
 export function isWriteTool(name) {
     return WRITE_TOOLS.has(name);

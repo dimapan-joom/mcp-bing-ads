@@ -21,6 +21,14 @@ import {
 import { tools } from "./tools.js";
 import { filterTools, assertWriteAllowed, isWriteEnabled } from "./writeGate.js";
 import { withResilience, safeResponse, logger } from "./resilience.js";
+import {
+  GOAL_ADDITIONAL_FIELDS,
+  QUERYABLE_GOAL_TYPES,
+  RawGoal,
+  OfflineDaily,
+  weekWindows,
+} from "./conversionGoals.js";
+import { conversionGoalHandlers } from "./conversionGoalTools.js";
 import v8 from "v8";
 
 // CLI package info
@@ -250,14 +258,14 @@ class BingAdsManager {
     };
   }
 
-  private async apiCall(url: string, body: any, client: ClientConfig, operationName: string = "apiCall"): Promise<any> {
+  private async apiCall(url: string, body: any, client: ClientConfig, operationName: string = "apiCall", method: "POST" | "PUT" | "DELETE" = "POST"): Promise<any> {
     return withResilience(async () => {
       const token = await this.getAccessToken();
       const headers = this.getHeaders(client);
       headers["Authorization"] = `Bearer ${token}`;
 
       const resp = await fetch(url, {
-        method: "POST",
+        method,
         headers,
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30_000),
@@ -1072,7 +1080,7 @@ class BingAdsManager {
 
     // Verify via single Bulk download
     const bulkRows = await this.getCampaignsWithRoas(client, "all");
-    const bulkMap = new Map(bulkRows.map(r => [r.campaign_id, parseFloat(r.campaign_type)]));
+    const bulkMap = new Map<string, number | null>(bulkRows.map(r => [r.campaign_id, r.target_roas]));
 
     const verified: typeof updates = [];
     const failed: Array<typeof updates[0] & { actual: number | null }> = [];
@@ -1624,6 +1632,126 @@ class BingAdsManager {
       stores: results,
     };
   }
+
+  // ============================================
+  // CONVERSION GOALS
+  // See conversionGoals.ts for the API facts these methods rely on.
+  // ============================================
+
+  async getConversionGoals(client: ClientConfig, goalIds?: string[]): Promise<RawGoal[]> {
+    const result = await this.apiCall(`${CAMPAIGN_MGMT_BASE}/ConversionGoals/QueryByIds`, {
+      ConversionGoalIds: goalIds?.length ? goalIds : null,
+      // REST takes flag enums comma-separated; space-separated is rejected.
+      ConversionGoalTypes: QUERYABLE_GOAL_TYPES.join(","),
+      ReturnAdditionalFields: GOAL_ADDITIONAL_FIELDS.join(","),
+    }, client, "getConversionGoals");
+    return result?.ConversionGoals ?? [];
+  }
+
+  /**
+   * Every campaign with its goal selection, bidding scheme and budget. Unlike
+   * listCampaigns, a failing campaign type is reported instead of silently
+   * dropped, because an audit that quietly skips PMax reads as "all clear".
+   */
+  async getCampaignsDetailed(client: ClientConfig): Promise<{ campaigns: any[]; errors: Array<{ campaign_type: string; message: string }> }> {
+    const types = ["Search", "Shopping", "PerformanceMax", "DynamicSearchAds"];
+    const errors: Array<{ campaign_type: string; message: string }> = [];
+    const results = await Promise.all(types.map(type =>
+      this.apiCall(`${CAMPAIGN_MGMT_BASE}/Campaigns/QueryByAccountId`, {
+        AccountId: client.account_id,
+        CampaignType: type,
+        // MaxConversionValueBiddingScheme makes TargetRoas come back for PMax,
+        // which the plain query returns as null.
+        ReturnAdditionalFields: "CampaignConversionGoal,MaxConversionValueBiddingScheme,BidStrategyId,TargetCpaInMaxConversion",
+      }, client, "getCampaignsDetailed").catch((err: any) => {
+        errors.push({ campaign_type: type, message: String(err?.message ?? err).slice(0, 300) });
+        return { Campaigns: [] };
+      })
+    ));
+    const seen = new Set<string>();
+    const campaigns = results.flatMap(r => r?.Campaigns ?? []).filter((c: any) => {
+      const id = String(c.Id);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    return { campaigns, errors };
+  }
+
+  private toReportDate(d: string) {
+    const [Year, Month, Day] = d.split("-").map(Number);
+    return { Year, Month, Day };
+  }
+
+  /** CampaignPerformanceReport with the Goal column: the only goal split that covers PMax and Shopping. */
+  async getGoalReportRows(client: ClientConfig, startDate: string, endDate: string, options: { daily?: boolean; campaignIds?: string[] } = {}): Promise<any[]> {
+    const scope: any = { AccountIds: [parseInt(client.account_id)] };
+    if (options.campaignIds?.length) {
+      scope.Campaigns = options.campaignIds.map(id => ({ AccountId: parseInt(client.account_id), CampaignId: parseInt(id) }));
+    }
+    const columns = ["CampaignId", "CampaignName", "CampaignType", "Goal", "GoalType", "Spend", "Conversions", "Revenue", "AllConversions", "AllRevenue"];
+    if (options.daily) columns.unshift("TimePeriod");
+    const requestId = await this.submitReport(client, {
+      Type: "CampaignPerformanceReportRequest",
+      ReportName: "Conversion Goal Performance",
+      Format: "Csv",
+      FormatVersion: "2.0",
+      ExcludeColumnHeaders: false,
+      ExcludeReportFooter: true,
+      ExcludeReportHeader: true,
+      ReturnOnlyCompleteData: false,
+      Aggregation: options.daily ? "Daily" : "Summary",
+      Columns: columns,
+      Scope: scope,
+      Time: {
+        CustomDateRangeStart: this.toReportDate(startDate),
+        CustomDateRangeEnd: this.toReportDate(endDate),
+        ReportTimeZone: "PacificTimeUSCanadaTijuana",
+      },
+    });
+    return await this.waitForReport(client, requestId);
+  }
+
+  async getOfflineConversionDaily(client: ClientConfig, goalIds: string[], startDate: string, endDate: string): Promise<{ daily: OfflineDaily[]; errors: any[] }> {
+    const daily: OfflineDaily[] = [];
+    const errors: any[] = [];
+    // Sequential on purpose: a 30-day lookback is 5 calls, and parallel bursts
+    // are what trips the Bing rate limiter.
+    for (const [s, e] of weekWindows(startDate, endDate)) {
+      const result = await this.apiCall(`${CAMPAIGN_MGMT_BASE}/OfflineConversionReport/QueryByGoalIds`, {
+        StartDateUtc: `${s}T00:00:00Z`,
+        EndDateUtc: `${e}T00:00:00Z`,
+        GoalIds: goalIds,
+      }, client, "getOfflineConversionReport");
+      for (const summary of result?.OfflineGoalConversionSummaries ?? []) {
+        daily.push(...(summary.DailySummaries ?? []));
+      }
+      for (const pe of result?.PartialErrors ?? []) errors.push({ window: [s, e], ...pe });
+    }
+    return { daily, errors };
+  }
+
+  async addCampaignConversionGoals(client: ClientConfig, pairs: Array<{ CampaignId: string; GoalId: string }>): Promise<any[]> {
+    if (!pairs.length) return [];
+    const r = await this.apiCall(`${CAMPAIGN_MGMT_BASE}/CampaignConversionGoals`, { CampaignConversionGoal: pairs }, client, "addCampaignConversionGoals", "POST");
+    return r?.PartialErrors ?? [];
+  }
+
+  async deleteCampaignConversionGoals(client: ClientConfig, pairs: Array<{ CampaignId: string; GoalId: string }>): Promise<any[]> {
+    if (!pairs.length) return [];
+    const r = await this.apiCall(`${CAMPAIGN_MGMT_BASE}/CampaignConversionGoals`, { CampaignConversionGoal: pairs }, client, "deleteCampaignConversionGoals", "DELETE");
+    return r?.PartialErrors ?? [];
+  }
+
+  async updateConversionGoals(client: ClientConfig, goals: Array<Record<string, unknown>>): Promise<any[]> {
+    const r = await this.apiCall(`${CAMPAIGN_MGMT_BASE}/ConversionGoals`, { ConversionGoals: goals }, client, "updateConversionGoals", "PUT");
+    return r?.PartialErrors ?? [];
+  }
+
+  async addConversionGoals(client: ClientConfig, goals: Array<Record<string, unknown>>): Promise<{ ids: Array<string | null>; errors: any[] }> {
+    const r = await this.apiCall(`${CAMPAIGN_MGMT_BASE}/ConversionGoals`, { ConversionGoals: goals }, client, "addConversionGoals", "POST");
+    return { ids: (r?.ConversionGoalIds ?? []).map((x: any) => (x == null ? null : String(x))), errors: r?.PartialErrors ?? [] };
+  }
 }
 
 // ============================================
@@ -1976,8 +2104,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+      default: {
+        const handler = conversionGoalHandlers[name];
+        if (!handler) throw new Error(`Unknown tool: ${name}`);
+        for (const key of ["start_date", "end_date"]) {
+          const v = args?.[key];
+          if (v !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(v))) throw new Error(`${key} must be YYYY-MM-DD`);
+        }
+        const client = resolveClient(args?.account_id as string);
+        const result = await handler(
+          { api: adsManager, client, today: new Date().toISOString().slice(0, 10) },
+          args ?? {},
+        );
+        return { content: [{ type: "text", text: JSON.stringify(safeResponse(result, name), null, 2) }] };
+      }
     }
   } catch (rawError: any) {
     const error = classifyError(rawError);
